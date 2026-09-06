@@ -47,6 +47,13 @@ func run() error {
 		return err
 	}
 
+	// The shell reads our stderr through a pipe. If the shell is killed, that
+	// pipe breaks, and Go's default is to kill the process on SIGPIPE for file
+	// descriptors 1 and 2 — which would take us down mid-log, before the
+	// orphan watchdog could shut down cleanly and unlink the socket. Dropping
+	// log lines into a dead pipe is the correct behaviour instead.
+	signal.Ignore(syscall.SIGPIPE)
+
 	level := slog.LevelInfo
 	if cfg.Debug {
 		level = slog.LevelDebug
