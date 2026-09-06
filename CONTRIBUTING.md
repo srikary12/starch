@@ -1,0 +1,155 @@
+# Contributing
+
+## Prerequisites
+
+| | |
+|---|---|
+| macOS | 13.0 or later |
+| Go | 1.23+ (`CGO_ENABLED=0` — see below) |
+| Xcode | required to **run tests** |
+
+Command Line Tools alone will build and run the app, but ships neither XCTest
+nor swift-testing, so `make test-swift` cannot work. If you have Xcode
+installed but not selected, the Makefile points at it automatically; to make it
+permanent:
+
+```sh
+sudo xcode-select -s /Applications/Xcode.app
+```
+
+## Everyday commands
+
+```sh
+make            # build daemon + app bundle
+make run        # build and launch
+make test       # Go (with -race) and Swift suites
+make check      # vet + gofmt check + tests
+make logs       # stream app and daemon logs
+make clean
+make help       # everything else
+```
+
+## Layout
+
+```
+cmd/starchd/            daemon entrypoint
+internal/
+  brand/                the product name, in one place
+  config/               environment-driven configuration
+  server/               UDS listener, routes, SSE encoder
+api/                    the wire contract — other shells depend on it
+apps/macos/
+  Sources/StarchKit/    testable logic: framing, client, lifecycle, settings
+  Sources/Starch/       AppKit shell: menu bar, windows, hot key
+  Tests/
+```
+
+`internal/` must stay OS-independent. Anything macOS-specific that leaks in
+there is a bug — the whole point of the split is that Windows and Linux shells
+reuse it unchanged. `os.UserConfigDir` and friends are the portable way to do
+per-platform paths; build tags are a last resort.
+
+Changing anything in `api/` is a contract change. Read the versioning rules at
+the bottom of [`api/README.md`](api/README.md) first.
+
+## Dependency policy
+
+**Ask before adding any third-party dependency**, in either language. Today the
+Go module has zero and the Swift package has zero; both use only the standard
+library and system frameworks. The one dependency already agreed is
+`modernc.org/sqlite` for M4, chosen because it is pure Go and keeps
+`CGO_ENABLED=0` — which is what makes cross-compiling to Windows and Linux a
+one-line build.
+
+## Quirks that will otherwise cost you an hour
+
+### Services registration is finicky
+
+*(Relevant from M1, when the right-click entry lands.)*
+
+macOS caches the Services list aggressively and generally only notices an app
+that lives in `/Applications`. After changing anything in `NSServices`:
+
+```sh
+make install            # copies to /Applications and registers
+make register-services  # lsregister -f + pbs -flush
+```
+
+If the menu entry still does not appear, log out and back in. This is normal
+and not a sign you have done something wrong.
+
+Worth documenting for users, too: any Service can be given its own shortcut in
+**System Settings → Keyboard → Keyboard Shortcuts → Services**.
+
+### Accessibility re-prompts on every rebuild
+
+TCC keys the permission grant to the app's code signature. The default build is
+ad-hoc signed, and an ad-hoc signature changes on every build, so macOS treats
+each build as a brand new app and asks again.
+
+```sh
+make reset-permissions   # tccutil reset Accessibility dev.starch.Starch
+```
+
+To avoid the re-prompt entirely, create a self-signed code signing certificate
+in Keychain Access (*Certificate Assistant → Create a Certificate*, type *Code
+Signing*) and build with it:
+
+```sh
+make app SIGN_IDENTITY="Starch Dev"
+```
+
+The signature is then stable across rebuilds and the grant sticks.
+
+### The Keychain may prompt on each rebuild too, for the same reason
+
+A new signature means a new identity as far as the Keychain ACL is concerned. A
+stable signing identity fixes this as well.
+
+### The bundle identifier is frozen
+
+`dev.starch.Starch` appears in `Info.plist` and in `Brand.bundleIdentifier`,
+and the app asserts they agree at launch in debug builds. Changing it silently
+de-authorises Accessibility and orphans Keychain items for every existing
+install. Do not.
+
+### Unix socket paths are capped at ~104 bytes
+
+`sun_path` is 104 bytes on Darwin. Both the daemon and the shell check this up
+front and fail with a readable message, because `bind` otherwise fails with a
+bare `EINVAL`. If you write a test that puts a socket in `t.TempDir()`, it will
+intermittently blow the limit — use the short-path helper in
+`internal/server/server_test.go` instead.
+
+### `log` may be shadowed in your shell
+
+If `log show` prints `too many arguments`, your shell has its own `log`. Use
+`/usr/bin/log`, which is what `make logs` does.
+
+## Tests
+
+Go tests are table-driven and must run with no network. The daemon is designed
+to be testable against an `httptest` provider stub.
+
+Swift tests cover what can be tested without a window server: HTTP framing,
+preferences, hot key encoding. The framing tests replay every fixture at six
+chunk sizes including one byte at a time — that is deliberate, because parsing
+correctly regardless of read boundaries is the entire job and the failure mode
+otherwise is silent truncation.
+
+Capture and overlay behaviour genuinely cannot be automated. Those live in
+[MANUAL_TESTS.md](MANUAL_TESTS.md), which is expected to be run and updated,
+not treated as decoration.
+
+Run `make check` before opening a PR.
+
+## Commits
+
+Small commits with clear messages. The message should say **why**, not restate
+the diff — if a decision has a trade-off, the commit that makes it is the right
+place to record the reasoning.
+
+If you hit a wall — the Accessibility API turning out to be a dead end in some
+major app, Services registration refusing to cooperate — say so early in an
+issue rather than building an elaborate workaround. Changing the plan is
+cheaper than inheriting the workaround.
