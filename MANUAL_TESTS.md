@@ -56,7 +56,7 @@ python3 -c "import socket;s=socket.socket(socket.AF_UNIX);s.bind('$HOME/Library/
 
 | # | Check | Expected |
 |---|---|---|
-| 20 | Press `⌃⌥⌘P` in TextEdit | Menu shows `Shortcut fired at <time> in TextEdit` |
+| 20 | Press `⌃⌥⌘P` in TextEdit | Status bar icon flashes `●` for ~0.7s. Menu also shows `Shortcut fired at <time> in TextEdit`. |
 | 21 | Confirm the keystroke was consumed | No `p` is typed into the document. This is the reason for Carbon over a global monitor. |
 | 22 | Repeat in Notes, Mail, Slack, Chrome, VS Code, Terminal | Fires in all; frontmost app name is correct |
 | 23 | Settings → click the shortcut → press `⌃⌥⌘K` | Button updates; new shortcut fires; old one does not |
@@ -64,6 +64,31 @@ python3 -c "import socket;s=socket.socket(socket.AF_UNIX);s.bind('$HOME/Library/
 | 25 | Press Escape while recording | Recording cancels, previous shortcut kept |
 | 26 | Try to record a shortcut another app owns | Readable "already claimed" message, not a silent failure |
 | 27 | Quit the app, press the shortcut | Nothing happens; no stale registration |
+| 28 | Try to record plain `⌘P` | **Refused**, naming the shortcut. A single modifier plus a character key shadows a system shortcut in every app. |
+| 29 | Try `⌥Space` | Accepted — Space carries no character, so one modifier is safe |
+| 30 | Hand-edit an unsafe shortcut into the plist, relaunch | Reverted to `⌃⌥⌘P`, logged as unsafe. See the recipe below. |
+
+The status bar flash exists only because there is nothing else to see until the
+overlay lands in M2. Without it a working hot key and a dead one are
+indistinguishable from the keyboard, which made this table untestable.
+
+Recipe for #30 — writes the ⌘P binding that used to be accepted:
+
+```sh
+python3 -c "
+import json, subprocess
+p = {'provider':'anthropic','model':'claude-sonnet-5','baseURL':'https://api.anthropic.com',
+     'hotKey':{'keyCode':35,'modifiers':256},'hasCompletedOnboarding':True,'debugLogging':False}
+subprocess.run(['defaults','write','dev.starch.Starch','preferences.v1',
+                '-data', json.dumps(p).encode().hex()], check=True)
+"
+```
+
+Then relaunch and check the log:
+
+```sh
+/usr/bin/log show --last 1m --info --predicate 'subsystem == "dev.starch.Starch"' | grep unsafe
+```
 
 ### Settings and Keychain
 
@@ -72,23 +97,23 @@ interactive prompt that would hang an unattended run — so it is covered here.
 
 | # | Check | Expected |
 |---|---|---|
-| 28 | Enter an API key, click Save | Field clears; status says a key is saved |
-| 29 | Keychain Access → search `dev.starch.Starch` | Item exists, of kind *application password* |
-| 30 | `defaults read dev.starch.Starch` | Preferences present. **No key material anywhere.** |
-| 31 | Quit and relaunch, open Settings | Status still reports a saved key |
-| 32 | Click Remove | Status flips to no key; the Keychain item is gone |
-| 33 | Switch provider with defaults untouched | Model and endpoint follow the new provider |
-| 34 | Type a custom endpoint, then switch provider | Custom value is **not** silently overwritten |
-| 35 | Save a key per provider, switch between them | Each provider keeps its own key |
-| 36 | Toggle verbose logging | Daemon restarts; `make logs` shows debug lines |
+| 31 | Enter an API key, click Save | Field clears; status says a key is saved |
+| 32 | Keychain Access → search `dev.starch.Starch` | Item exists, of kind *application password* |
+| 33 | `defaults read dev.starch.Starch` | Preferences present. **No key material anywhere.** |
+| 34 | Quit and relaunch, open Settings | Status still reports a saved key |
+| 35 | Click Remove | Status flips to no key; the Keychain item is gone |
+| 36 | Switch provider with defaults untouched | Model and endpoint follow the new provider |
+| 37 | Type a custom endpoint, then switch provider | Custom value is **not** silently overwritten |
+| 38 | Save a key per provider, switch between them | Each provider keeps its own key |
+| 39 | Toggle verbose logging | Daemon restarts; `make logs` shows debug lines |
 
 ### Housekeeping
 
 | # | Check | Expected |
 |---|---|---|
-| 37 | `make check` | Everything passes |
-| 38 | `codesign --verify --strict --verbose=2 /Applications/Starch.app` | Valid |
-| 39 | Read `make logs` output after a full session | No API key, no user text, anywhere |
+| 40 | `make check` | Everything passes |
+| 41 | `codesign --verify --strict --verbose=2 /Applications/Starch.app` | Valid |
+| 42 | Read `make logs` output after a full session | No API key, no user text, anywhere |
 
 ---
 

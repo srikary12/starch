@@ -16,6 +16,7 @@ final class MenuBarController {
     private let accessibilityItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let hotKeyItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let activityItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private var flash: Task<Void, Never>?
 
     init() {
         if let button = statusItem.button {
@@ -83,6 +84,25 @@ final class MenuBarController {
     func note(_ text: String) {
         activityItem.title = text
         activityItem.isHidden = false
+    }
+
+    /// Flashes the status bar item to show the trigger fired.
+    ///
+    /// The menu note alone is not enough: it requires opening the menu, so a
+    /// working hot key and a dead one look identical from the keyboard. Until
+    /// the overlay lands in M2 this is the only way to test the trigger by
+    /// hand. It goes away when there is a real overlay to show.
+    func flashTrigger(_ text: String) {
+        note(text)
+        guard let button = statusItem.button else { return }
+
+        flash?.cancel()
+        button.title = " ●"
+        flash = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled else { return }
+            self?.statusItem.button?.title = ""
+        }
     }
 
     @objc private func openSettings() { onOpenSettings?() }
@@ -229,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown app"
         let time = Date().formatted(date: .omitted, time: .standard)
         Log.app.info("hot key fired in \(app, privacy: .public)")
-        menuBar.note("Shortcut fired at \(time) in \(app)")
+        menuBar.flashTrigger("Shortcut fired at \(time) in \(app)")
     }
 
     // MARK: Windows

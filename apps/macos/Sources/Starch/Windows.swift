@@ -318,9 +318,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         }
 
         let spec = HotKeySpec(event: event)
-        guard spec.isValid else {
+        if let reason = spec.invalidReason {
             hotKeyButton.title = preferences.hotKey.displayString
-            keyStatusLabel.stringValue = "A shortcut needs Command, Control or Option."
+            keyStatusLabel.stringValue = reason
             keyStatusLabel.textColor = .systemOrange
             return
         }

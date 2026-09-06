@@ -180,10 +180,40 @@ public struct HotKeySpec: Sendable, Equatable, Codable {
         modifiers: [.control, .option, .command]
     )
 
-    /// A hot key with no modifier, or shift alone, would swallow ordinary
-    /// typing system-wide.
-    public var isValid: Bool {
-        !modifiers.intersection([.command, .control, .option]).isEmpty
+    /// Keys safe to bind behind a single modifier: they carry no character and
+    /// shadow nothing people type. Everything else needs two modifiers.
+    private static let singleModifierSafeKeys: Set<Int> = [
+        kVK_Space,
+        kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6,
+        kVK_F7, kVK_F8, kVK_F9, kVK_F10, kVK_F11, kVK_F12,
+    ]
+
+    public var isValid: Bool { invalidReason == nil }
+
+    /// Why this combination cannot be used as a global hot key, or nil.
+    ///
+    /// This is stricter than it looks, deliberately. The binding is global, so
+    /// a bad choice does not just fail to work — it silently breaks a shortcut
+    /// in every other app, with no clue as to why.
+    public var invalidReason: String? {
+        let primary = modifiers.intersection([.command, .control, .option])
+
+        if primary.isEmpty {
+            return "A shortcut needs Command, Control or Option. Without one it would "
+                + "swallow ordinary typing in every app."
+        }
+
+        // One modifier plus a character key shadows something people rely on:
+        // ⌘P is Print, ⌃A jumps to line start in every text field, and ⌥P
+        // types π. Function keys and Space are the exceptions.
+        if primary.rawValue.nonzeroBitCount == 1,
+           !Self.singleModifierSafeKeys.contains(Int(keyCode))
+        {
+            return "\(displayString) would override that shortcut in every app — ⌘P would "
+                + "stop Print working everywhere. Add a second modifier."
+        }
+
+        return nil
     }
 
     /// Menu-style rendering, e.g. "⌃⌥⌘P".
@@ -287,7 +317,18 @@ public struct PreferencesStore {
             return Preferences()
         }
         do {
-            return try JSONDecoder().decode(Preferences.self, from: data)
+            var preferences = try JSONDecoder().decode(Preferences.self, from: data)
+            // A stored shortcut can predate the current validity rules, or
+            // come from a hand-edited plist. Registering an unsafe one would
+            // break that key in every app, so fall back rather than honour it.
+            if !preferences.hotKey.isValid {
+                Log.app.error(
+                    "stored shortcut \(preferences.hotKey.displayString, privacy: .public) is unsafe, reverting to default"
+                )
+                preferences.hotKey = .default
+                save(preferences)
+            }
+            return preferences
         } catch {
             // Corrupt or from a future build. Defaults are always usable, and
             // losing settings beats refusing to launch.

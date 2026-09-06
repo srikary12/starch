@@ -22,6 +22,27 @@ public final class DaemonProcess {
             if case .running = self { return true }
             return false
         }
+
+        /// Equality ignores uptime.
+        ///
+        /// `DaemonHealth.uptimeMs` advances on every heartbeat, so a synthesised
+        /// `==` would report a status change every five seconds and churn the
+        /// menu for no reason. What actually identifies the daemon is which
+        /// process it is and what it speaks.
+        public static func == (lhs: Status, rhs: Status) -> Bool {
+            switch (lhs, rhs) {
+            case (.stopped, .stopped), (.starting, .starting):
+                true
+            case let (.running(a), .running(b)):
+                a.pid == b.pid && a.version == b.version && a.apiVersion == b.apiVersion
+            case let (.mismatch(a), .mismatch(b)):
+                a == b
+            case let (.failed(a), .failed(b)):
+                a == b
+            default:
+                false
+            }
+        }
     }
 
     /// How often the shell pings `/healthz`. This doubles as the heartbeat

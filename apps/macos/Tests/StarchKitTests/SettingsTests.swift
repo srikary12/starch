@@ -46,17 +46,53 @@ struct HotKeySpecTests {
         #expect(spec.displayString == "⌘Key 9999")
     }
 
-    /// A hot key with no modifier would swallow the plain key system-wide, and
-    /// shift alone would swallow every capital letter.
+    /// No modifier at all would swallow the plain key everywhere, and shift
+    /// alone would swallow every capital letter.
     @Test("a hot key must carry command, control or option")
-    func validity() {
+    func requiresPrimaryModifier() {
         let p = UInt32(kVK_ANSI_P)
         #expect(HotKeySpec(keyCode: p, modifiers: []).isValid == false)
         #expect(HotKeySpec(keyCode: p, modifiers: [.shift]).isValid == false)
-        #expect(HotKeySpec(keyCode: p, modifiers: [.command]).isValid)
-        #expect(HotKeySpec(keyCode: p, modifiers: [.control]).isValid)
-        #expect(HotKeySpec(keyCode: p, modifiers: [.option]).isValid)
-        #expect(HotKeySpec(keyCode: p, modifiers: [.shift, .command]).isValid)
+    }
+
+    /// Regression: the recorder used to accept ⌘P, which silently stopped
+    /// Print working in every app on the machine. A global binding with one
+    /// modifier and a character key always shadows something.
+    @Test("a single modifier with a character key is refused", arguments: [
+        HotKeySpec.Modifiers.command, .control, .option,
+    ])
+    func singleModifierWithCharacterKeyRefused(modifier: HotKeySpec.Modifiers) {
+        for keyCode in [kVK_ANSI_P, kVK_ANSI_C, kVK_ANSI_0, kVK_ANSI_Slash, kVK_Return] {
+            let spec = HotKeySpec(keyCode: UInt32(keyCode), modifiers: modifier)
+            #expect(spec.isValid == false, "\(spec.displayString) should be refused")
+            #expect(spec.invalidReason != nil)
+        }
+    }
+
+    @Test("two modifiers make a character key acceptable")
+    func twoModifiersAccepted() {
+        let p = UInt32(kVK_ANSI_P)
+        #expect(HotKeySpec(keyCode: p, modifiers: [.command, .option]).isValid)
+        #expect(HotKeySpec(keyCode: p, modifiers: [.control, .command]).isValid)
+        #expect(HotKeySpec.default.isValid)
+        // Shift is not a primary modifier: ⇧⌘P is still only one of them.
+        #expect(HotKeySpec(keyCode: p, modifiers: [.shift, .command]).isValid == false)
+    }
+
+    /// Space and the function keys carry no character, so a single modifier is
+    /// safe — this is the ⌥Space shape that launchers use.
+    @Test("space and function keys are fine behind one modifier")
+    func singleModifierSafeKeys() {
+        #expect(HotKeySpec(keyCode: UInt32(kVK_Space), modifiers: [.option]).isValid)
+        #expect(HotKeySpec(keyCode: UInt32(kVK_F5), modifiers: [.command]).isValid)
+        #expect(HotKeySpec(keyCode: UInt32(kVK_F12), modifiers: [.control]).isValid)
+    }
+
+    @Test("the reason names the offending shortcut so the message is actionable")
+    func invalidReasonIsSpecific() throws {
+        let spec = HotKeySpec(keyCode: UInt32(kVK_ANSI_P), modifiers: [.command])
+        let reason = try #require(spec.invalidReason)
+        #expect(reason.contains("⌘P"))
     }
 
     @Test("modifier raw values are the Carbon ones RegisterEventHotKey expects")
@@ -139,7 +175,7 @@ struct PreferencesTests {
                 provider: .openAICompatible,
                 model: "qwen2.5",
                 baseURL: "http://localhost:1234/v1",
-                hotKey: HotKeySpec(keyCode: UInt32(kVK_ANSI_R), modifiers: [.command, .shift]),
+                hotKey: HotKeySpec(keyCode: UInt32(kVK_ANSI_R), modifiers: [.command, .option]),
                 hasCompletedOnboarding: true,
                 debugLogging: true
             )
@@ -162,6 +198,27 @@ struct PreferencesTests {
         withTempDefaults { defaults in
             defaults.set(Data("not json".utf8), forKey: PreferencesStore.defaultsKey)
             #expect(PreferencesStore(defaults: defaults).load() == Preferences())
+        }
+    }
+
+    /// Regression: a ⌘P binding stored before the validity rules tightened
+    /// must not be registered on the next launch — it would keep Print broken
+    /// system-wide with no indication why.
+    @Test("an unsafe stored shortcut is repaired on load and rewritten")
+    func unsafeStoredHotKeyRepaired() throws {
+        try withTempDefaults { defaults in
+            let store = PreferencesStore(defaults: defaults)
+            let unsafe = HotKeySpec(keyCode: UInt32(kVK_ANSI_P), modifiers: [.command])
+
+            // Write it directly: save() is not the vector, a stale plist is.
+            var prefs = Preferences()
+            prefs.hotKey = unsafe
+            defaults.set(try JSONEncoder().encode(prefs), forKey: PreferencesStore.defaultsKey)
+
+            #expect(store.load().hotKey == .default)
+            // And the repair is persisted, not re-derived on every launch.
+            let reread = try #require(defaults.data(forKey: PreferencesStore.defaultsKey))
+            #expect(try JSONDecoder().decode(Preferences.self, from: reread).hotKey == .default)
         }
     }
 
