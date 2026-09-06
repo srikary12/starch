@@ -117,33 +117,70 @@ interactive prompt that would hang an unattended run — so it is covered here.
 
 ---
 
-## M1 — capture *(not yet implemented)*
+## M1 — capture
 
-The point of this table is the middle column. Report which strategy each app
-actually takes; the Accessibility API is read-only or silently broken across a
-lot of Electron and web content, and knowing exactly where is the deliverable.
+Replacement is M2. What M1 reports is which **read** strategy each app takes,
+plus whether an AX write-back *would* be possible — probed with
+`AXUIElementIsAttributeSettable` rather than attempted, so nothing is modified.
 
-| App | Expected path | AX read | AX write | Clipboard fallback | Notes |
+Setup:
+
+```sh
+make install                    # Services discovery needs /Applications
+open /Applications/Starch.app   # registers the service on first launch
+make logs                       # second terminal
+```
+
+Grant Accessibility to the `/Applications` copy — it is a different signature
+from your build-directory copy, so the grant does not carry over.
+
+### Already verified automatically
+
+| Check | Result |
+|---|---|
+| Service registered with `pbs` | ✅ correct `NSMessage`, `NSPortName`, send/return types |
+| `NSPerformService("Starch", …)` reaches the handler | ✅ |
+| Handler feeds the shared flow | ✅ `captured via services … 54 chars` |
+| No selected text in the log | ✅ character count only |
+| Clipboard restored on success, timeout, non-text, and thrown error | ✅ 14 unit tests |
+
+### The matrix — needs you
+
+Select a sentence, press `⌃⌥⌘P`, read the status-bar note. It reports
+`strategy · chars · app · AX-writable|paste-only · preview`.
+
+| App | Expected | Strategy taken | AX-writable? | Chars correct? | Notes |
 |---|---|---|---|---|---|
-| TextEdit | Accessibility | | | | |
-| Notes | Accessibility | | | | |
-| Mail | Accessibility | | | | |
-| Safari (textarea) | Accessibility | | | | |
+| TextEdit | accessibility | | | | |
+| Notes | accessibility | | | | |
+| Mail | accessibility | | | | |
+| Safari (textarea) | accessibility | | | | |
 | Safari (contenteditable) | ? | | | | |
 | Chrome | likely clipboard | | | | |
+| Zen / Firefox | ? | | | | |
 | Slack | likely clipboard | | | | |
 | VS Code | likely clipboard | | | | |
-| Terminal / iTerm | clipboard, read-only | | | | Replacement may be impossible |
+| Terminal / iTerm | clipboard | | | | Expect paste-only |
 | Obsidian | ? | | | | |
 
-Also verify, for every app above:
+Then right-click → **Starch** in each and confirm the note says `services`.
 
-- The original clipboard is restored — including on **every** error path.
-  Silently eating someone's clipboard is the fastest way to get uninstalled.
-- The frontmost app is captured *before* the overlay appears and reactivated
-  before pasting, or the paste goes nowhere.
-- When both strategies fail, the overlay says so rather than failing silently.
-- `Cmd-Z` in the host app undoes the replacement cleanly.
+### The guarantees
+
+| # | Check | Expected |
+|---|---|---|
+| 43 | Copy something distinctive, then trigger in a clipboard-fallback app | Your clipboard is unchanged afterwards |
+| 44 | Trigger with **nothing** selected | A readable "could not read the selection" note — never silence |
+| 45 | Trigger in a non-text context (Finder icon view) | Same: a message, not silence |
+| 46 | Revoke Accessibility, then press the shortcut | Note explains it, and onboarding opens. Right-click → Starch still works. |
+| 47 | Hold `⌃⌥⌘` down for two seconds before releasing `P` | Still captures. This is the held-modifier case that would otherwise send ⌃⌥⌘C. |
+| 48 | Select a 10,000-character block and trigger | Correct character count; no truncation |
+| 49 | Select text with emoji and CJK | Character count matches; preview renders |
+| 50 | Trigger repeatedly, fast, in the same app | No stuck state, clipboard still intact |
+| 51 | Read `make logs` after all of the above | Character counts only. **No selected text anywhere.** |
+
+Timings are in the log as `in N.Nms`. Worth recording the AX and clipboard
+numbers separately — the 500ms first-token budget in M2 is built on them.
 
 ---
 
