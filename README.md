@@ -103,8 +103,9 @@ make help       # every target
 
 The app is a menu bar utility with no Dock icon — look in the status bar.
 
-`make install` copies it to `/Applications` and registers it, which the
-right-click Services entry will need once M1 lands.
+`make install` copies it to `/Applications` and registers it. The right-click
+**Starch** entry needs this: macOS only discovers Services from apps installed
+there, and caches the list aggressively.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development quirks worth knowing
 before you lose an hour to one of them.
