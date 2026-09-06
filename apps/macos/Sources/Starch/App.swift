@@ -119,6 +119,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let menuBar = MenuBarController()
     private let hotKeys = HotKeyManager()
     private let accessibilityWatcher = Accessibility.Watcher()
+    private let capturer = SelectionCapturer()
+    private let services = ServicesProvider()
 
     private var preferences = Preferences()
     private var daemon: DaemonProcess?
@@ -141,6 +143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         startDaemon()
         registerHotKey()
+        registerServices()
         refreshMenu()
 
         // Keep the menu honest about permission changes made in System
@@ -242,14 +245,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// M0 stops here: capture, overlay and rewriting arrive in M1 and M2.
-    /// Recording the trigger in the menu and the log is what makes the hot key
-    /// verifiable by hand today.
     private func hotKeyFired() {
-        let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "unknown app"
-        let time = Date().formatted(date: .omitted, time: .standard)
-        Log.app.info("hot key fired in \(app, privacy: .public)")
-        menuBar.flashTrigger("Shortcut fired at \(time) in \(app)")
+        Task { @MainActor in
+            switch await capturer.capture() {
+            case let .success(capture):
+                beginRewrite(with: capture)
+            case let .failure(error):
+                reportCaptureFailure(error)
+            }
+        }
+    }
+
+    // MARK: Services
+
+    private func registerServices() {
+        services.onSelection = { [weak self] text in
+            guard let self else { return }
+            self.beginRewrite(with: self.capturer.capture(fromService: text))
+        }
+        NSApp.servicesProvider = services
+        // Without this the entry only appears after a relaunch, and often not
+        // even then. See `make register-services` for the rest of the ritual.
+        NSUpdateDynamicServices()
+    }
+
+    // MARK: The shared flow
+
+    /// Where both triggers converge.
+    ///
+    /// M1 ends here: the selection is captured and shown. The overlay, the
+    /// rewrite and the replacement land in M2, and they hang off this one
+    /// function so there is a single code path and a single UX.
+    private func beginRewrite(with capture: SelectionCapturer.Capture) {
+        let replaceable = capture.replaceableViaAX ? "AX-writable" : "paste-only"
+        menuBar.flashTrigger(
+            """
+            \(capture.strategy.rawValue) · \(capture.text.count) chars · \
+            \(capture.appName) · \(replaceable) — \(capture.preview)
+            """
+        )
+    }
+
+    private func reportCaptureFailure(_ error: SelectionCapturer.Failure) {
+        // Never fail silently: if neither strategy worked the user needs to
+        // know that, not wonder whether the shortcut fired at all.
+        menuBar.flashTrigger(error.localizedDescription)
+
+        if case .notTrusted = error {
+            showOnboarding()
+        }
     }
 
     // MARK: Windows
