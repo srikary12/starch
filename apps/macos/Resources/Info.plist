@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Starch</string>
+	<key>CFBundleDisplayName</key>
+	<string>Starch</string>
+	<key>CFBundleExecutable</key>
+	<string>Starch</string>
+
+	<!--
+	  Frozen after the first public release: macOS keys Accessibility grants
+	  and Keychain ACLs off this identifier, so changing it silently
+	  de-authorises every existing install. Must match Brand.bundleIdentifier,
+	  which the app asserts at launch in debug builds.
+	-->
+	<key>CFBundleIdentifier</key>
+	<string>dev.starch.Starch</string>
+
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__VERSION__</string>
+
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+
+	<!-- Menu bar utility: no Dock icon, no app switcher entry. -->
+	<key>LSUIElement</key>
+	<true/>
+
+	<key>NSHumanReadableCopyright</key>
+	<string>Licensed under the Apache License, Version 2.0.</string>
+
+	<!--
+	  NSServices lands in M1, wiring the right-click "Starch" entry. It is
+	  deliberately absent until the handler exists: a declared service with no
+	  implementation puts a dead item in every app's context menu.
+
+	  When it is added it needs NSMessage, NSPortName, and NSSendTypes /
+	  NSReturnTypes of public.utf8-plain-text, plus NSUpdateDynamicServices()
+	  at launch and `make register-services` to make it discoverable.
+	-->
+</dict>
+</plist>

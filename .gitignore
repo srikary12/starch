@@ -2,6 +2,7 @@
 /build/
 /dist/
 apps/macos/.build/
+apps/macos/build/
 apps/macos/*.xcodeproj
 
 # Go
