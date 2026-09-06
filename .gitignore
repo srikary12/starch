@@ -1,0 +1,16 @@
+# Build output
+/build/
+/dist/
+apps/macos/.build/
+apps/macos/*.xcodeproj
+
+# Go
+*.test
+*.out
+
+# macOS
+.DS_Store
+
+# Local, machine-specific overrides
+/.env
+/.envrc
