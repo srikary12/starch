@@ -121,4 +121,12 @@ public enum Log {
     public static let app = Logger(subsystem: Brand.bundleIdentifier, category: "app")
     public static let daemon = Logger(subsystem: Brand.bundleIdentifier, category: "daemon")
     public static let permissions = Logger(subsystem: Brand.bundleIdentifier, category: "permissions")
+
+    /// Text capture and replacement.
+    ///
+    /// Metadata only — which strategy ran, how long it took, how many
+    /// characters. The selected text itself is never written here: it is the
+    /// most sensitive thing the app touches, and the unified log outlives the
+    /// process and is readable by other tooling.
+    public static let capture = Logger(subsystem: Brand.bundleIdentifier, category: "capture")
 }
