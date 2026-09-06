@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import os
 
 /// Owns the lifetime of the `starchd` child process.
 ///
@@ -55,6 +56,14 @@ public final class DaemonProcess {
     private var heartbeat: Task<Void, Never>?
     private var restartAttempt = 0
     private var stopping = false
+
+    /// The daemon's most recent stderr line.
+    ///
+    /// When starchd refuses to start it says exactly why — "another daemon is
+    /// already listening on …" — and that sentence is far more use in the menu
+    /// than "exited with status 1". Written from the pipe's reader thread, so
+    /// it needs a lock rather than actor isolation.
+    private nonisolated let lastStderrLine = OSAllocatedUnfairLock<String?>(initialState: nil)
 
     public init(executableURL: URL, socketPath: String, debug: Bool = false) {
         self.executableURL = executableURL
@@ -171,9 +180,14 @@ public final class DaemonProcess {
 
         guard !stopping else { return }
 
-        let detail = reason == .uncaughtSignal
+        var detail = reason == .uncaughtSignal
             ? "daemon killed by signal \(code)"
             : "daemon exited with status \(code)"
+        // Prefer the daemon's own account of why it gave up.
+        if code != 0, let reported = lastStderrLine.withLock({ $0 }) {
+            detail = reported
+        }
+
         Log.app.error("\(detail, privacy: .public)")
         status = .failed(detail)
         scheduleRestart()
@@ -271,6 +285,13 @@ public final class DaemonProcess {
                 .split(separator: "\n", omittingEmptySubsequences: true)
             {
                 Log.daemon.info("\(String(line), privacy: .public)")
+                // A fatal startup error is printed bare ("starchd: ..."),
+                // whereas normal operation logs structured key=value lines.
+                // Keeping only the bare ones avoids reporting a routine
+                // "listening" line as if it were a failure.
+                if !line.contains("level=") {
+                    self.lastStderrLine.withLock { $0 = String(line) }
+                }
             }
         }
     }
