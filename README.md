@@ -136,8 +136,19 @@ puts reading the current selection, and writing a replacement back, behind that
 permission. It reads the text you have selected when you trigger it, and
 nothing else: no keystroke logging, no background monitoring.
 
-The right-click → Services route needs no permissions at all, which makes it a
-lower-commitment way to try Starch first.
+The right-click → **Starch** route needs no permissions at all, which makes it
+the lower-commitment way to try Starch first. It does need one switch, though:
+macOS registers every new third-party Services entry **switched off**, so the
+first time you install Starch the menu item will not appear anywhere until you
+turn it on.
+
+**System Settings → Keyboard → Keyboard Shortcuts → Services → Text →** tick
+**Starch**. Then quit and reopen the app you want to use it in — apps read the
+Services list once at launch.
+
+Starch detects this and says so in its menu and its set-up guide, rather than
+leaving you to right-click and conclude the feature is broken. You can give the
+service its own keyboard shortcut on that same screen.
 
 ---
 

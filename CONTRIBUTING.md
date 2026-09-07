@@ -78,8 +78,31 @@ make register-services  # lsregister -f + pbs -flush
 If the menu entry still does not appear, log out and back in. This is normal
 and not a sign you have done something wrong.
 
-Two failure modes that look identical to "registration is broken" but are not.
-Check both before touching the plist:
+Three failure modes look identical to "registration is broken" and none of them
+are. Check all three before touching the plist — in this order, because this is
+the order of likelihood:
+
+**macOS ships the service switched off.** This is the usual answer. A newly
+registered third-party text service is disabled by default: it appears in
+System Settings → Keyboard → Keyboard Shortcuts → Services → Text with its
+checkbox clear, and appears nowhere else until ticked. Nothing is logged and
+nothing is wrong. Check the live state with:
+
+```sh
+defaults read pbs NSServicesStatus
+```
+
+An absent `NSServicesStatus` key, or no entry for
+`dev.starch.Starch - Starch - rewriteSelection`, means never-configured, which
+behaves as off. `ServicesMenu.state()` reads exactly this, and the app surfaces
+it in the menu bar and the set-up guide.
+
+Note the key format: `"<bundle id> - <menu item title> - <NSMessage>"`. The menu
+title is part of it, so renaming the entry in `NSServices` silently resets every
+existing user's choice and hands them a fresh unticked service with no
+explanation.
+
+The other two:
 
 **The host app caches the Services menu at launch.** An app that was already
 running when the service was registered will not show it until you quit and

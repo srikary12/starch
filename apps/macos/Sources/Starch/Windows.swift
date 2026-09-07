@@ -360,6 +360,8 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     private let statusLabel = UI.label("")
     private let grantButton = NSButton(title: "Grant Accessibility Access…", target: nil, action: nil)
     private let settingsButton = NSButton(title: "Open System Settings", target: nil, action: nil)
+    private let servicesStatusLabel = UI.label("")
+    private let servicesButton = NSButton(title: "Open Services Settings…", target: nil, action: nil)
 
     init() {
         super.init(window: UI.window(title: "Welcome to \(Brand.name)", size: NSSize(width: 560, height: 520)))
@@ -382,6 +384,9 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     private func buildUI() {
         grantButton.target = self
         grantButton.action = #selector(requestAccessibility)
+        servicesButton.target = self
+        servicesButton.action = #selector(openServicesSettings)
+        servicesButton.bezelStyle = settingsButton.bezelStyle
         grantButton.bezelStyle = .rounded
         settingsButton.target = self
         settingsButton.action = #selector(openSettings)
@@ -403,12 +408,15 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
 
             UI.heading("Two ways to trigger it"),
             UI.label("1.  The keyboard shortcut, anywhere. Needs Accessibility access."),
-            UI.label("2.  Right-click → \(Brand.name), from the Services menu. Needs no permissions at all."),
+            UI.label("2.  Right-click → \(Brand.name), from the Services menu. Needs no permission."),
             UI.secondary(
-                "The right-click route is the lower-commitment way to try \(Brand.name) first. "
-                + "You can also give it a shortcut of its own in System Settings → Keyboard → "
-                + "Keyboard Shortcuts → Services."
+                "The right-click route asks for no permissions, which makes it the lower-commitment "
+                + "way to try \(Brand.name) first — but macOS ships every new third-party Services "
+                + "entry switched off, so it has to be turned on once before it appears. You can give "
+                + "it a keyboard shortcut of its own on the same screen."
             ),
+            servicesStatusLabel,
+            UI.hstack([servicesButton]),
 
             UI.separator(),
 
@@ -451,6 +459,18 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func refreshStatus() {
+        switch ServicesMenu.state() {
+        case .enabled:
+            servicesStatusLabel.stringValue = "✓  Right-click → \(Brand.name) is switched on."
+            servicesStatusLabel.textColor = .systemGreen
+            servicesButton.isEnabled = false
+        case .disabled, .notConfigured:
+            servicesStatusLabel.stringValue =
+                "○  Not switched on yet. Tick \(Brand.name) under Text, then reopen the app you want to use it in."
+            servicesStatusLabel.textColor = .secondaryLabelColor
+            servicesButton.isEnabled = true
+        }
+
         if Accessibility.isTrusted {
             statusLabel.stringValue = "✓  Accessibility access is granted. The keyboard shortcut will work."
             statusLabel.textColor = .systemGreen
@@ -471,6 +491,16 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func openSettings() {
         Accessibility.openSystemSettings()
+    }
+
+    @objc private func openServicesSettings() {
+        ServicesMenu.openSettings()
+    }
+
+    /// There is no notification for a Services enablement change, so refresh
+    /// when the user comes back from System Settings.
+    func windowDidBecomeKey(_ notification: Notification) {
+        refreshStatus()
     }
 
     @objc private func finish() {

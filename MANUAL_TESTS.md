@@ -134,6 +134,15 @@ make logs                       # second terminal
 Grant Accessibility to the `/Applications` copy — it is a different signature
 from your build-directory copy, so the grant does not carry over.
 
+Then switch the Services entry on, which macOS does **not** do for you:
+System Settings → Keyboard → Keyboard Shortcuts → Services → Text → tick
+**Starch**. The menu bar reports `Right-click menu: on` once it is. Quit and
+reopen any app you want to test it in — apps cache the Services list at launch.
+
+This survives rebuilds (the preference key is derived from the bundle
+identifier, menu title and message, none of which change), so it is a one-time
+step unless the menu title changes.
+
 ### Already verified automatically
 
 | Check | Result |

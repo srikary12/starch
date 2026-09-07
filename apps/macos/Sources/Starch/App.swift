@@ -15,6 +15,7 @@ final class MenuBarController {
     private let connectionItem = NSMenuItem(title: "Starting…", action: nil, keyEquivalent: "")
     private let accessibilityItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let hotKeyItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let servicesItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let activityItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private var flash: Task<Void, Never>?
 
@@ -37,6 +38,7 @@ final class MenuBarController {
         menu.addItem(connectionItem)
         menu.addItem(accessibilityItem)
         menu.addItem(hotKeyItem)
+        menu.addItem(servicesItem)
         menu.addItem(activityItem)
         menu.addItem(.separator())
 
@@ -58,7 +60,12 @@ final class MenuBarController {
         statusItem.menu = menu
     }
 
-    func update(daemon: DaemonProcess.Status, preferences: Preferences, accessibilityTrusted: Bool) {
+    func update(
+        daemon: DaemonProcess.Status,
+        preferences: Preferences,
+        accessibilityTrusted: Bool,
+        servicesState: ServicesMenuState
+    ) {
         switch daemon {
         case .stopped:
             connectionItem.title = "Helper stopped"
@@ -77,6 +84,22 @@ final class MenuBarController {
             : "Accessibility: not granted (shortcut inactive)"
 
         hotKeyItem.title = "Shortcut: \(preferences.hotKey.displayString)"
+
+        // macOS ships a new third-party service switched off, so this is the
+        // normal state after a fresh install, not an error. Make it actionable
+        // rather than just reporting it.
+        switch servicesState {
+        case .enabled:
+            servicesItem.title = "Right-click menu: on"
+            servicesItem.action = nil
+            servicesItem.target = nil
+            servicesItem.isEnabled = false
+        case .disabled, .notConfigured:
+            servicesItem.title = "Right-click menu: off — turn on in Settings…"
+            servicesItem.action = #selector(openServicesSettings)
+            servicesItem.target = self
+            servicesItem.isEnabled = true
+        }
     }
 
     /// Transient line in the menu, used in M0 to make the hot key observable
@@ -105,6 +128,7 @@ final class MenuBarController {
         }
     }
 
+    @objc private func openServicesSettings() { ServicesMenu.openSettings() }
     @objc private func openSettings() { onOpenSettings?() }
     @objc private func openOnboarding() { onOpenOnboarding?() }
     @objc private func restartDaemon() { onRestartDaemon?() }
@@ -174,7 +198,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menuBar.update(
                 daemon: .failed(error.localizedDescription),
                 preferences: preferences,
-                accessibilityTrusted: Accessibility.isTrusted
+                accessibilityTrusted: Accessibility.isTrusted,
+                servicesState: ServicesMenu.state()
             )
             return
         }
@@ -187,7 +212,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menuBar.update(
                 daemon: .failed(error.localizedDescription),
                 preferences: preferences,
-                accessibilityTrusted: Accessibility.isTrusted
+                accessibilityTrusted: Accessibility.isTrusted,
+                servicesState: ServicesMenu.state()
             )
             return
         }
@@ -347,7 +373,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar.update(
             daemon: daemon?.status ?? .stopped,
             preferences: preferences,
-            accessibilityTrusted: Accessibility.isTrusted
+            accessibilityTrusted: Accessibility.isTrusted,
+            servicesState: ServicesMenu.state()
         )
     }
 }
