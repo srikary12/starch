@@ -11,11 +11,10 @@ and it is only worth using if it is faster than that loop.
 Bring your own API key. There is no account, no hosted backend, and no
 telemetry.
 
-> **Status: pre-release (M1).** The app runs in the menu bar, supervises its
-> local helper, and captures the selected text from either trigger — the
-> keyboard shortcut or right-click → Starch. **It does not rewrite anything
-> yet**; it shows you what it captured and how. The first real rewrite lands in
-> M2. See [Roadmap](#roadmap).
+> **Status: pre-release (M2).** The loop works end to end: select text, press
+> the shortcut, watch the rewrite stream into an overlay, press Return to
+> replace it in place. Bring your own key. Presets are not yet editable and
+> there is no voice profile — see [Roadmap](#roadmap).
 
 ---
 
@@ -158,7 +157,7 @@ service its own keyboard shortcut on that same screen.
 |---|---|---|
 | **M0** | Two skeletons — daemon, menu bar app, handshake, hotkey, onboarding | ✅ done |
 | **M1** | Text capture: Accessibility path plus clipboard fallback, both triggers | ✅ done |
-| **M2** | The loop: providers, streaming rewrite, overlay, replace in place | |
+| **M2** | The loop: providers, streaming rewrite, overlay, replace in place | ✅ done |
 | **M3** | Presets, including a neutral-business-English one | |
 | **M4** | Local voice profile — output that sounds like you, not like an LLM | |
 | **M5** | Notarised DMG and a Homebrew cask | |

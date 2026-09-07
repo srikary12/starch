@@ -87,8 +87,8 @@ and may be reworded at any time.
 | `method_not_allowed` | 405 | Route exists, wrong method. Response carries `Allow`. |
 | `not_implemented` | 501 | Reserved: route is in the contract but unavailable in this build. |
 
-Codes for provider failures (auth, rate limits, upstream errors) are defined in
-[§5](#5-planned-endpoints) and land with M2.
+Provider failure codes are listed with
+[`POST /v1/rewrite`](#post-v1rewrite--stream-a-rewrite-m2).
 
 ---
 
@@ -124,14 +124,10 @@ daemon's idle-exit timer.
 
 ---
 
-## 5. Planned endpoints
-
-Documented for shell authors. Not served yet.
-
 ### `POST /v1/session` — hand over provider credentials *(M2)*
 
 The shell reads the API key from the OS secret store and posts it here. The
-daemon holds it **in memory only** and never writes it to disk or to a log.
+daemon holds it **in memory only** and never writes it to disk or a log.
 `starchd` has no access to any platform secret store, by design: each shell
 uses its own native one and the contract stays identical.
 
@@ -145,8 +141,25 @@ uses its own native one and the contract stays identical.
 ```
 
 `provider` is `anthropic` or `openai_compatible`. `base_url` is optional for
-`anthropic` and required for `openai_compatible` (OpenAI, OpenRouter, Groq,
-Together, Ollama, LM Studio).
+`anthropic` and **required** for `openai_compatible`, where it must include the
+endpoint's own version prefix — `https://api.openai.com/v1`,
+`http://localhost:11434/v1` for Ollama, `http://localhost:1234/v1` for LM
+Studio. `api_key` may be empty for local endpoints.
+
+**Response `200`**
+
+```json
+{ "ok": true, "provider": "anthropic", "model": "claude-sonnet-5",
+  "endpoint": "https://api.anthropic.com" }
+```
+
+`endpoint` is echoed so a shell can confirm what the daemon resolved when it
+supplied a default. **The key is never echoed.**
+
+The session lives only as long as the daemon process. A shell must be ready to
+re-establish it: a rewrite attempted without one returns `428 no_session`, and
+the right response is to POST here and retry once rather than surfacing an
+error the user cannot act on.
 
 ### `POST /v1/rewrite` — stream a rewrite *(M2)*
 
@@ -154,11 +167,43 @@ Together, Ollama, LM Studio).
 { "text": "...", "preset": "concise", "hint": "optional freeform steer" }
 ```
 
-Responds `200` with `Content-Type: text/event-stream`. See [§7](#7-sse-framing).
+`preset` is one of `professional`, `concise`, `friendly`, `grammar`,
+`neutral`. An unknown or absent value falls back to `professional` rather than
+failing — the user is mid-sentence. `text` is capped at 1 MiB.
 
-Cancellation is part of the contract: when the user presses Esc the shell
-closes the connection, and the daemon must cancel the upstream provider call
-rather than letting the generation run on and bill the user.
+Responds `200` with `Content-Type: text/event-stream`; see [§7](#7-sse-framing).
+
+**Errors split by whether output has started.** Anything knowable up front — no
+session, a rejected key, an unknown model, an unreachable endpoint — is a real
+status code with the JSON envelope, so a shell can show it without having
+consumed a stream that never began. Anything after the first delta must arrive
+in-band, because the `200` is already sent.
+
+| Code | HTTP | Meaning |
+|---|---|---|
+| `no_session` | 428 | No provider configured. POST `/v1/session` and retry. |
+| `provider_auth` | 401 | The endpoint rejected the key. |
+| `model_not_found` | 400 | The endpoint does not recognise the model. |
+| `selection_too_large` | 413 | Too long for the model, or over the daemon's cap. |
+| `rate_limited` | 429 | Retryable after a wait. |
+| `provider_overloaded` | 503 | Retryable. |
+| `provider_unreachable` | 503 | Could not connect. Usually a local server that is not running. |
+| `provider_error` | 502 | Unclassified upstream failure. |
+
+Every `message` is written to be shown to a user as-is, and is scrubbed of
+anything key-shaped before it leaves the daemon.
+
+**Cancellation is part of the contract.** When the user presses Escape the
+shell closes the connection; the daemon cancels the upstream provider call
+rather than letting the generation run on and bill the user. A shell that
+merely stops reading, without closing, has not cancelled anything.
+
+
+---
+
+## 5. Planned endpoints
+
+Documented for shell authors. Not served yet.
 
 ### `POST /v1/accept` — record an accepted rewrite *(M4)*
 
