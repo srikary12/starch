@@ -78,6 +78,40 @@ make register-services  # lsregister -f + pbs -flush
 If the menu entry still does not appear, log out and back in. This is normal
 and not a sign you have done something wrong.
 
+Two failure modes that look identical to "registration is broken" but are not.
+Check both before touching the plist:
+
+**The host app caches the Services menu at launch.** An app that was already
+running when the service was registered will not show it until you quit and
+reopen *that* app — not Starch. This is the usual explanation for an entry that
+is provably registered and still invisible.
+
+**`NSReturnTypes` hides the item everywhere read-only.** A service declaring
+return types is only enabled where the selection is editable, because macOS
+needs somewhere to put what comes back. It is easy to read the declaration as
+*enabling* placement in editable contexts; it does the opposite, restricting to
+them. Starch is send-only and must stay that way — it does its own replacement.
+
+To check what is actually registered, rather than what you think you declared:
+
+```sh
+/System/Library/CoreServices/pbs -dump | grep -A14 dev.starch.Starch
+```
+
+To exercise the handler without a context menu at all:
+
+```swift
+// swift thisfile.swift — reaches the service directly, bypassing menu display
+import AppKit
+let pb = NSPasteboard(name: .init("Probe"))
+pb.clearContents()
+pb.setString("some text", forType: .string)
+print(NSPerformService("Starch", pb) ? "dispatched" : "service not found")
+```
+
+That separates *is the service wired up* from *is macOS showing it*, which are
+different problems with different fixes.
+
 Worth documenting for users, too: any Service can be given its own shortcut in
 **System Settings → Keyboard → Keyboard Shortcuts → Services**.
 

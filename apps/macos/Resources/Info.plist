@@ -44,12 +44,17 @@
 	  rewriteSelection:userData:error: on ServicesProvider, which is installed
 	  as NSApp.servicesProvider at launch.
 
-	  NSReturnTypes is declared even though the handler never writes back to
-	  the pasteboard. Returning text there would make macOS replace the
-	  selection for us — no Accessibility needed — but it forces a blocking
-	  call with no streaming overlay, so we decline it. What the declaration
-	  buys is menu placement: the item then shows up in editable text contexts,
-	  which is where replacing the selection makes sense.
+	  There is deliberately no NSReturnTypes. Declaring it would let macOS
+	  replace the selection for us, with no Accessibility work at all — which
+	  is tempting and wrong, because it forces a blocking call with no
+	  streaming overlay. We do the replacement ourselves.
+
+	  Leaving it out also matters for visibility, which is easy to get
+	  backwards: a service that declares return types is only *enabled* where
+	  the selection is editable, since macOS needs somewhere to put what comes
+	  back. Send-only services appear against any text selection. Because we
+	  never write to the pasteboard, declaring return types would have bought
+	  nothing and hidden the item everywhere read-only.
 
 	  Discovery is cached hard by macOS: the app generally has to live in
 	  /Applications. See `make register-services`.
@@ -67,10 +72,6 @@
 			<key>NSPortName</key>
 			<string>Starch</string>
 			<key>NSSendTypes</key>
-			<array>
-				<string>public.utf8-plain-text</string>
-			</array>
-			<key>NSReturnTypes</key>
 			<array>
 				<string>public.utf8-plain-text</string>
 			</array>
