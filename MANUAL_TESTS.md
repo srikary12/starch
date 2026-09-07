@@ -160,24 +160,30 @@ Select a sentence, press `⌃⌥⌘P`, read the status-bar note. It reports
 
 Results from 2026-09-07, macOS 26.6, Apple silicon:
 
-| App | Expected | AX-writable? | Verified |
-|---|---|---|---|
-| TextEdit | accessibility | ✅ AX-writable | ✅ |
-| Notes | accessibility | ✅ AX-writable | ✅ |
-| Safari | accessibility | ❌ paste-only | ✅ **expectation was wrong** |
-| Chrome | clipboard | ❌ paste-only | ✅ |
-| VS Code | clipboard | ❌ paste-only | ✅ |
-| Mail | accessibility | | not yet run |
-| Slack | clipboard | | not yet run |
-| Zen / Firefox | ? | | not yet run |
-| Terminal / iTerm | clipboard | | not yet run |
-| Obsidian | ? | | not yet run |
+| App | Expected | Read strategy | Replace | Verified |
+|---|---|---|---|---|
+| TextEdit | accessibility | accessibility | AX-writable | ✅ |
+| Notes | accessibility | accessibility | AX-writable | ✅ |
+| Safari | accessibility | **clipboard** | paste-only | ✅ **expectation was wrong** |
+| Chrome | clipboard | clipboard | paste-only | ✅ |
+| VS Code | clipboard | clipboard | paste-only | ✅ |
+| Mail | accessibility | | | not yet run |
+| Slack | clipboard | | | not yet run |
+| Zen / Firefox | ? | | | not yet run |
+| Terminal / iTerm | clipboard | | | not yet run |
+| Obsidian | ? | | | not yet run |
 
-The finding that matters: **Safari is paste-only.** WebKit does not expose
-`kAXSelectedTextAttribute` as settable for web content, so being a first-party
-native app buys nothing here — what decides is whether the text lives in a
-native control or in a web view. Native editors are AX-writable; everything
-rendering web content is not.
+The finding that matters: **Safari falls back to the clipboard for reading as
+well as writing.** The AX read fails outright — web content does not usefully
+expose `kAXSelectedTextAttribute` at all, readable or settable — so being a
+first-party native app buys nothing. What decides is whether the text lives in
+a native control or in a web view, and every browser and Electron app is the
+latter.
+
+So the split is not "native apps versus the awkward ones". It is two clean
+populations: native editors get the AX path end to end, and everything
+rendering web content gets the clipboard path end to end. Nothing observed so
+far sits in between — no app read via AX and then refused the write.
 
 That makes paste the *majority* replace path rather than the fallback, since
 most of the writing people want rewritten happens in a browser or Electron.
@@ -190,8 +196,10 @@ Consequences for M2:
   the one that needs checking, not the paste path.
 - The source app has to be reactivated before the paste lands, and the overlay
   is non-activating precisely so that focus was never lost.
-- Every paste-path rewrite pays a clipboard round-trip at each end. That is the
-  latency case to measure against the 500ms budget, not the AX one.
+- Web-view apps pay a clipboard round-trip at **both** ends — once to capture,
+  once to replace — plus the wait for the trigger's modifiers to clear. That
+  whole path sits inside the 500ms first-token budget and is the one to
+  instrument. The AX path is nearly free by comparison and is not the risk.
 
 Then right-click → **Starch** in each and confirm the note says `services`.
 
