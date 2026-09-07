@@ -158,19 +158,40 @@ step unless the menu title changes.
 Select a sentence, press `⌃⌥⌘P`, read the status-bar note. It reports
 `strategy · chars · app · AX-writable|paste-only · preview`.
 
-| App | Expected | Strategy taken | AX-writable? | Chars correct? | Notes |
-|---|---|---|---|---|---|
-| TextEdit | accessibility | | | | |
-| Notes | accessibility | | | | |
-| Mail | accessibility | | | | |
-| Safari (textarea) | accessibility | | | | |
-| Safari (contenteditable) | ? | | | | |
-| Chrome | likely clipboard | | | | |
-| Zen / Firefox | ? | | | | |
-| Slack | likely clipboard | | | | |
-| VS Code | likely clipboard | | | | |
-| Terminal / iTerm | clipboard | | | | Expect paste-only |
-| Obsidian | ? | | | | |
+Results from 2026-09-07, macOS 26.6, Apple silicon:
+
+| App | Expected | AX-writable? | Verified |
+|---|---|---|---|
+| TextEdit | accessibility | ✅ AX-writable | ✅ |
+| Notes | accessibility | ✅ AX-writable | ✅ |
+| Safari | accessibility | ❌ paste-only | ✅ **expectation was wrong** |
+| Chrome | clipboard | ❌ paste-only | ✅ |
+| VS Code | clipboard | ❌ paste-only | ✅ |
+| Mail | accessibility | | not yet run |
+| Slack | clipboard | | not yet run |
+| Zen / Firefox | ? | | not yet run |
+| Terminal / iTerm | clipboard | | not yet run |
+| Obsidian | ? | | not yet run |
+
+The finding that matters: **Safari is paste-only.** WebKit does not expose
+`kAXSelectedTextAttribute` as settable for web content, so being a first-party
+native app buys nothing here — what decides is whether the text lives in a
+native control or in a web view. Native editors are AX-writable; everything
+rendering web content is not.
+
+That makes paste the *majority* replace path rather than the fallback, since
+most of the writing people want rewritten happens in a browser or Electron.
+Consequences for M2:
+
+- The clipboard save/restore machinery is load-bearing, not a safety net. Its
+  failure modes are user-visible in the common case, not the rare one.
+- Paste replacement gives a clean `Cmd-Z` in the host app for free, which an AX
+  write does not reliably do. The brief requires undo to work; the AX path is
+  the one that needs checking, not the paste path.
+- The source app has to be reactivated before the paste lands, and the overlay
+  is non-activating precisely so that focus was never lost.
+- Every paste-path rewrite pays a clipboard round-trip at each end. That is the
+  latency case to measure against the 500ms budget, not the AX one.
 
 Then right-click → **Starch** in each and confirm the note says `services`.
 
