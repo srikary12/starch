@@ -274,6 +274,7 @@ provider did.
 | 67 | Quit the helper mid-session, trigger | Re-handshakes and succeeds, or explains itself |
 | 68 | `pkill -9 starchd`, then trigger | Same — the 428 retry path |
 | 69 | Trigger with no key set at all | A readable message, not a hang |
+| 69a | Revoke Accessibility, then use **right-click → Starch** and press Return | Says replacing needs Accessibility, **and** puts the rewrite on your clipboard. It must not claim success. |
 | 70 | Read `make logs` after all of the above | No key, no selected text, no rewrite text. Timings and counts only. |
 
 ### Latency, against the 500ms budget

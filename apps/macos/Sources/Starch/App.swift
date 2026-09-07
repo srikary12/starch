@@ -423,9 +423,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case let .success(method):
                 menuBar.flashTrigger("Replaced via \(method.rawValue) in \(capture.appName)")
             case let .failure(error):
-                // Never fail silently: the rewrite is gone from the overlay by
-                // now, so the user has to be told it did not land.
-                menuBar.flashTrigger(error.localizedDescription)
+                // Never fail silently, and never lose the rewrite. The overlay
+                // has already closed by this point, so the clipboard is the
+                // only place left to put it — announced rather than silently.
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                let saved = pasteboard.setString(text, forType: .string)
+
+                menuBar.flashTrigger(
+                    saved
+                        ? "\(error.localizedDescription) The rewrite is on your clipboard."
+                        : error.localizedDescription
+                )
             }
         }
     }
@@ -473,7 +482,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .unauthorized:
                 return "The helper rejected the handshake. Try Restart Helper."
             default:
-                return daemonError.localizedDescription ?? "The rewrite failed."
+                return daemonError.localizedDescription
             }
         }
         return error.localizedDescription

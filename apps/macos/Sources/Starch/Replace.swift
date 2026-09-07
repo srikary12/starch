@@ -78,10 +78,23 @@ struct Replacer {
     /// path now, so "we usually restore it" would mean routinely eating the
     /// user's clipboard.
     private func pasteReplacement(_ text: String) async throws {
+        // Posting a synthetic Cmd-V needs Accessibility trust; without it the
+        // event is dropped with no error and the paste simply does not happen.
+        //
+        // This is reachable, not theoretical. The Services path captures text
+        // without the permission — macOS hands it to us — so right-click →
+        // Starch on an untrusted install gets a rewrite, a Return, and
+        // silence. Checking here is what turns that into an explanation.
+        guard Accessibility.isTrusted else {
+            throw PasteFailure.notTrusted
+        }
+
         try await clipboard.withSavedClipboard { _ in
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
-            pasteboard.setString(text, forType: .string)
+            guard pasteboard.setString(text, forType: .string) else {
+                throw PasteFailure.clipboardWriteRefused
+            }
 
             Keystroke.sendCommandV()
 
@@ -91,6 +104,25 @@ struct Replacer {
             // app has read ours, and paste the wrong thing. This wait is the
             // price of the clipboard path.
             try? await Task.sleep(for: .milliseconds(120))
+        }
+    }
+
+    /// Ways the paste path can fail detectably.
+    ///
+    /// Both used to be silent, which meant reporting a successful replacement
+    /// that never happened — the worst possible outcome, because the user
+    /// walks away believing their text was changed.
+    private enum PasteFailure: Error, LocalizedError {
+        case notTrusted
+        case clipboardWriteRefused
+
+        var errorDescription: String? {
+            switch self {
+            case .notTrusted:
+                "Replacing text needs Accessibility access."
+            case .clipboardWriteRefused:
+                "Another app is holding the clipboard."
+            }
         }
     }
 
