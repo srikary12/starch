@@ -270,11 +270,51 @@ public struct HotKeySpec: Sendable, Equatable, Codable {
 ///
 /// Nothing sensitive belongs in here: this is backed by UserDefaults, which is
 /// a plist in the user's home directory. The API key lives in `Keychain`.
+/// A rewriting style, mirroring `internal/prompt` in the daemon.
+///
+/// Only the identifier and the display name live here. The instruction text is
+/// the daemon's, so a Windows or Linux shell does not have to duplicate prompt
+/// wording that would then drift. M3 replaces this hard-coded list with
+/// `GET /v1/presets`.
+public struct Preset: Sendable, Equatable, Identifiable {
+    public let id: String
+    public let name: String
+
+    public init(id: String, name: String) {
+        self.id = id
+        self.name = name
+    }
+}
+
+public enum Presets {
+    public static let defaultID = "professional"
+
+    public static let all: [Preset] = [
+        Preset(id: "professional", name: "Professional"),
+        Preset(id: "concise", name: "Concise"),
+        Preset(id: "friendly", name: "Friendly"),
+        Preset(id: "grammar", name: "Fix grammar only"),
+        Preset(id: "neutral", name: "Neutral business English"),
+    ]
+
+    /// Falls back to the default rather than failing: the user is mid-sentence.
+    public static func named(_ id: String) -> Preset {
+        all.first { $0.id == id } ?? all.first { $0.id == defaultID } ?? all[0]
+    }
+
+    /// The next preset in display order, wrapping. Backs Tab in the overlay.
+    public static func next(after id: String) -> String {
+        guard let index = all.firstIndex(where: { $0.id == id }) else { return defaultID }
+        return all[(index + 1) % all.count].id
+    }
+}
+
 public struct Preferences: Sendable, Equatable, Codable {
     public var provider: ProviderID
     public var model: String
     public var baseURL: String
     public var hotKey: HotKeySpec
+    public var presetID: String
     public var hasCompletedOnboarding: Bool
     public var debugLogging: Bool
 
@@ -283,6 +323,7 @@ public struct Preferences: Sendable, Equatable, Codable {
         model: String? = nil,
         baseURL: String? = nil,
         hotKey: HotKeySpec = .default,
+        presetID: String = Presets.defaultID,
         hasCompletedOnboarding: Bool = false,
         debugLogging: Bool = false
     ) {
@@ -290,8 +331,30 @@ public struct Preferences: Sendable, Equatable, Codable {
         self.model = model ?? provider.defaultModel
         self.baseURL = baseURL ?? provider.defaultBaseURL
         self.hotKey = hotKey
+        self.presetID = presetID
         self.hasCompletedOnboarding = hasCompletedOnboarding
         self.debugLogging = debugLogging
+    }
+
+    /// Decoding tolerates missing keys.
+    ///
+    /// Preferences are stored as one JSON blob, so with synthesised decoding a
+    /// field added in a new version makes every existing user's stored
+    /// settings undecodable — and they silently revert to defaults on upgrade.
+    /// Every field is optional on the way in for that reason.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let provider = try container.decodeIfPresent(ProviderID.self, forKey: .provider) ?? .anthropic
+
+        self.init(
+            provider: provider,
+            model: try container.decodeIfPresent(String.self, forKey: .model),
+            baseURL: try container.decodeIfPresent(String.self, forKey: .baseURL),
+            hotKey: try container.decodeIfPresent(HotKeySpec.self, forKey: .hotKey) ?? .default,
+            presetID: try container.decodeIfPresent(String.self, forKey: .presetID) ?? Presets.defaultID,
+            hasCompletedOnboarding: try container.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? false,
+            debugLogging: try container.decodeIfPresent(Bool.self, forKey: .debugLogging) ?? false
+        )
     }
 }
 

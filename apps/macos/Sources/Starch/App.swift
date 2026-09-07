@@ -145,6 +145,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let accessibilityWatcher = Accessibility.Watcher()
     private let capturer = SelectionCapturer()
     private let services = ServicesProvider()
+    private let overlay = OverlayController()
+    private let replacer = Replacer()
+
+    /// The in-flight rewrite. Cancelling it tears down the socket, which the
+    /// daemon turns into cancellation of the upstream model call.
+    private var rewriteTask: Task<Void, Never>?
+    /// Whether the daemon has been given credentials for the current settings.
+    private var sessionReady = false
 
     private var preferences = Preferences()
     private var daemon: DaemonProcess?
@@ -303,13 +311,172 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// rewrite and the replacement land in M2, and they hang off this one
     /// function so there is a single code path and a single UX.
     private func beginRewrite(with capture: SelectionCapturer.Capture) {
-        let replaceable = capture.replaceableViaAX ? "AX-writable" : "paste-only"
-        menuBar.flashTrigger(
+        // A second trigger replaces the first rather than racing it.
+        rewriteTask?.cancel()
+
+        let preset = Presets.named(preferences.presetID)
+        overlay.begin(presetName: preset.name, near: capture)
+
+        overlay.onAccept = { [weak self] text in
+            self?.applyReplacement(text, for: capture)
+        }
+        overlay.onCancel = { [weak self] in
+            // Cancelling the task closes the socket, which is what stops the
+            // generation upstream. Without this Escape would only hide the UI.
+            self?.rewriteTask?.cancel()
+            Log.capture.info("rewrite cancelled by the user")
+        }
+        overlay.onCyclePreset = { [weak self] in
+            self?.cyclePreset(for: capture)
+        }
+
+        rewriteTask = Task { @MainActor [weak self] in
+            await self?.stream(capture: capture, preset: preset)
+        }
+    }
+
+    /// Runs one rewrite into the overlay.
+    private func stream(capture: SelectionCapturer.Capture, preset: Preset) async {
+        guard let client = daemon?.client else {
+            overlay.showError("The helper is not running.")
+            return
+        }
+
+        // The daemon holds the key in memory only, so a restarted daemon needs
+        // the session again. Establishing it lazily here — rather than at
+        // launch — also means a key added in Settings works without a restart.
+        if !sessionReady, !(await establishSession(client: client)) { return }
+
+        do {
+            try await runStream(client: client, capture: capture, preset: preset)
+        } catch let error as DaemonError {
+            // The daemon lost its session — it restarted, or the supervisor
+            // replaced it after a crash. Re-handshake and try once more rather
+            // than making the user trigger again for something invisible.
+            if case let .api(_, code, _) = error, code == "no_session" {
+                sessionReady = false
+                guard await establishSession(client: client) else { return }
+                do {
+                    try await runStream(client: client, capture: capture, preset: preset)
+                } catch {
+                    overlay.showError(readableMessage(for: error))
+                }
+                return
+            }
+            overlay.showError(readableMessage(for: error))
+        } catch is CancellationError {
+            overlay.hide()
+        } catch {
+            overlay.showError(readableMessage(for: error))
+        }
+    }
+
+    /// One pass over the stream. Separated so the no-session retry can rerun it.
+    private func runStream(
+        client: DaemonClient,
+        capture: SelectionCapturer.Capture,
+        preset: Preset
+    ) async throws {
+        let started = ContinuousClock.now
+        var firstToken: Duration?
+
+        for try await event in client.rewrite(text: capture.text, preset: preset.id) {
+            if Task.isCancelled { return }
+            switch event {
+            case let .delta(text):
+                if firstToken == nil { firstToken = started.duration(to: .now) }
+                overlay.append(text)
+            case let .done(full, usage):
+                overlay.finish(full: full)
+                logTiming(started: started, firstToken: firstToken, usage: usage, preset: preset.id)
+            case let .failed(code, message):
+                Log.capture.error("rewrite failed: \(code, privacy: .public)")
+                overlay.showError(message)
+            }
+        }
+    }
+
+    private func establishSession(client: DaemonClient) async -> Bool {
+        // keychainAccount, not rawValue: Settings writes under the former, and
+        // reading the wrong account silently finds no key and looks to the user
+        // like their saved key was ignored.
+        let key = (try? keychain.get(account: preferences.provider.keychainAccount)) ?? nil
+
+        do {
+            _ = try await client.startSession(SessionRequest(
+                provider: preferences.provider.rawValue,
+                model: preferences.model,
+                baseURL: preferences.baseURL,
+                apiKey: key ?? ""
+            ))
+            sessionReady = true
+            return true
+        } catch {
+            overlay.showError(readableMessage(for: error))
+            return false
+        }
+    }
+
+    private func applyReplacement(_ text: String, for capture: SelectionCapturer.Capture) {
+        Task { @MainActor in
+            switch await replacer.replace(text, for: capture) {
+            case let .success(method):
+                menuBar.flashTrigger("Replaced via \(method.rawValue) in \(capture.appName)")
+            case let .failure(error):
+                // Never fail silently: the rewrite is gone from the overlay by
+                // now, so the user has to be told it did not land.
+                menuBar.flashTrigger(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Drops the daemon's session so the next rewrite re-sends credentials.
+    ///
+    /// Without this, changing provider or pasting a new key in Settings would
+    /// have no effect until the app restarted — the daemon would keep using
+    /// whatever it was handed first.
+    func invalidateSession() {
+        sessionReady = false
+    }
+
+    private func cyclePreset(for capture: SelectionCapturer.Capture) {
+        preferences.presetID = Presets.next(after: preferences.presetID)
+        store.save(preferences)
+        refreshMenu()
+        beginRewrite(with: capture)
+    }
+
+    private func logTiming(
+        started: ContinuousClock.Instant,
+        firstToken: Duration?,
+        usage: RewriteUsage?,
+        preset: String
+    ) {
+        let total = Double(started.duration(to: .now).components.attoseconds) / 1e15
+        let first = firstToken.map { Double($0.components.attoseconds) / 1e15 } ?? -1
+        Log.capture.info(
             """
-            \(capture.strategy.rawValue) · \(capture.text.count) chars · \
-            \(capture.appName) · \(replaceable) — \(capture.preview)
+            rewrite done preset=\(preset, privacy: .public) \
+            first_token_ms=\(first, format: .fixed(precision: 0)) \
+            total_ms=\(total, format: .fixed(precision: 0)) \
+            tokens_out=\(usage?.outputTokens ?? -1)
             """
         )
+    }
+
+    private func readableMessage(for error: Error) -> String {
+        if let daemonError = error as? DaemonError {
+            switch daemonError {
+            case let .api(_, _, message):
+                // The daemon already phrased this for a human.
+                return message
+            case .unauthorized:
+                return "The helper rejected the handshake. Try Restart Helper."
+            default:
+                return daemonError.localizedDescription ?? "The rewrite failed."
+            }
+        }
+        return error.localizedDescription
     }
 
     private func reportCaptureFailure(_ error: SelectionCapturer.Failure) {
@@ -366,6 +533,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The daemon reads its log level from the environment at spawn.
             restartDaemon()
         }
+        // Any settings change may have altered the credentials, including a
+        // new key saved under the same provider. Re-handshaking is cheap and a
+        // stale session is invisible until a rewrite fails.
+        invalidateSession()
         refreshMenu()
     }
 
