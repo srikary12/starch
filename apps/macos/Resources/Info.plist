@@ -71,9 +71,18 @@
 			<string>rewriteSelection</string>
 			<key>NSPortName</key>
 			<string>Starch</string>
+			<!--
+			  Both spellings, deliberately. NSStringPboardType is the legacy
+			  name and public.utf8-plain-text the modern UTI; they are supposed
+			  to be equivalent, but every Apple-provided service in
+			  `pbs -dump` still declares the legacy one, and matching is the
+			  thing standing between a registered service and a visible menu
+			  item. Declaring both costs nothing.
+			-->
 			<key>NSSendTypes</key>
 			<array>
 				<string>public.utf8-plain-text</string>
+				<string>NSStringPboardType</string>
 			</array>
 		</dict>
 	</array>
