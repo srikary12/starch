@@ -222,12 +222,80 @@ numbers separately — the 500ms first-token budget in M2 is built on them.
 
 ---
 
-## M2 — the loop *(not yet implemented)*
+## M2 — the loop
 
-- First token visible within 500ms of the trigger; 2–3 sentence rewrite under
-  1.5s. Measure with the debug timing flag, and record real numbers.
-- Escape cancels and the upstream generation actually stops — verify against
-  the provider's usage dashboard, not just the UI.
-- A 401 from the provider shows a readable message, not a raw error string.
-- The overlay never steals focus from the source app.
-- Text is never replaced without the user seeing the rewrite first.
+Needs a real API key in Settings, or a local Ollama / LM Studio endpoint.
+Everything below costs tokens except the local-model rows.
+
+### Already verified automatically
+
+| Check | Result |
+|---|---|
+| SSE parsed identically at 6 chunk sizes, incl. 1 byte at a time | ✅ both languages |
+| Deltas over 64KB not truncated | ✅ the `bufio.Scanner` trap |
+| Reasoning/thinking deltas never emitted as output | ✅ |
+| Cancellation reaches the upstream, asserted server-side | ✅ |
+| API key absent from every error path and log | ✅ |
+| Full loop over the real socket against a stub provider | ✅ `first_token_ms=56` |
+
+### The loop — needs you
+
+| # | Check | Expected |
+|---|---|---|
+| 52 | Select a sentence in TextEdit, press the shortcut | Overlay appears **near the selection**, text streams in |
+| 53 | Watch where the overlay lands | Near the selected text, not at a screen corner. Falls back to the mouse in web views. |
+| 54 | Check the source app during streaming | It stays frontmost — its caret keeps blinking, its title bar stays active |
+| 55 | Press Return | Selection is replaced in place; overlay closes |
+| 56 | Press `Cmd-Z` in the host app | Undoes the replacement cleanly, in one step |
+| 57 | Press Escape mid-stream | Overlay closes immediately, nothing is replaced |
+| 58 | Press Return **while still streaming** | Ignored — a half sentence must never land |
+| 59 | Press Tab | Cycles preset and re-runs against the same selection |
+| 60 | Repeat 52–56 in Chrome, Safari, Slack, VS Code | Works via paste; clipboard intact afterwards |
+| 61 | Copy something distinctive, then accept a rewrite in Chrome | Your clipboard still holds what you copied |
+| 62 | Trigger from right-click → Starch | Same overlay, same behaviour |
+
+### Cancellation actually stopping the spend
+
+| # | Check | Expected |
+|---|---|---|
+| 63 | Select a long paragraph, trigger, press Escape after ~1s | Overlay closes |
+| 64 | Check the provider's usage dashboard for that request | Output tokens reflect the **truncated** generation, not a full one |
+
+Test 64 is the one that matters and the only way to verify it for real. The
+unit test asserts the stub sees the disconnect; only the dashboard proves the
+provider did.
+
+### Failure modes
+
+| # | Check | Expected |
+|---|---|---|
+| 65 | Put a wrong API key in Settings, trigger | Overlay says the key was rejected and names Settings. **Not** a raw error string. |
+| 66 | Point at `http://localhost:99999/v1`, trigger | "Could not reach … Is it running" |
+| 67 | Quit the helper mid-session, trigger | Re-handshakes and succeeds, or explains itself |
+| 68 | `pkill -9 starchd`, then trigger | Same — the 428 retry path |
+| 69 | Trigger with no key set at all | A readable message, not a hang |
+| 70 | Read `make logs` after all of the above | No key, no selected text, no rewrite text. Timings and counts only. |
+
+### Latency, against the 500ms budget
+
+```sh
+/usr/bin/log show --last 30m --info --predicate 'subsystem == "dev.starch.Starch"' | grep first_token_ms
+```
+
+Record separately for the AX path (TextEdit, Notes) and the clipboard path
+(Chrome, Safari, VS Code) — the latter pays a round trip at each end plus the
+modifier-release wait, and is the one at risk.
+
+| Path | first_token_ms | total_ms | Target |
+|---|---|---|---|
+| AX (TextEdit) | | | <500 / <1500 |
+| Clipboard (Chrome) | | | <500 / <1500 |
+
+**Known risk worth measuring first.** Current models run adaptive thinking by
+default, and the daemon does not send a `thinking` parameter. For a two-line
+rewrite that should be near-zero, but if `first_token_ms` is over budget this
+is the first thing to check — the fix is a per-model request tweak, and it is
+deliberately not guessed at before there are numbers.
+
+---
+
