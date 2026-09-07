@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -43,7 +44,7 @@ func quietLogger() *slog.Logger {
 
 // startDaemon runs a Server on a real Unix socket and returns a client bound
 // to it plus a channel carrying Serve's eventual return value.
-func startDaemon(t *testing.T, opts Options) (*http.Client, string, <-chan error) {
+func startDaemon(t *testing.T, opts Options) (*http.Client, string, *Server, <-chan error) {
 	t.Helper()
 	if opts.Token == "" {
 		opts.Token = testToken
@@ -82,7 +83,7 @@ func startDaemon(t *testing.T, opts Options) (*http.Client, string, <-chan error
 		_ = ln.Close()
 	})
 
-	return unixClient(path), path, done
+	return unixClient(path), path, srv, done
 }
 
 func unixClient(path string) *http.Client {
@@ -124,7 +125,7 @@ func decodeError(t *testing.T, resp *http.Response) APIError {
 }
 
 func TestHealthzOverUnixSocket(t *testing.T) {
-	c, _, _ := startDaemon(t, Options{Version: "1.2.3"})
+	c, _, _, _ := startDaemon(t, Options{Version: "1.2.3"})
 
 	resp := do(t, c, http.MethodGet, "/healthz", testToken)
 	if resp.StatusCode != http.StatusOK {
@@ -153,7 +154,7 @@ func TestHealthzOverUnixSocket(t *testing.T) {
 }
 
 func TestAuth(t *testing.T) {
-	c, _, _ := startDaemon(t, Options{})
+	c, _, _, _ := startDaemon(t, Options{})
 
 	tests := []struct {
 		name   string
@@ -201,7 +202,7 @@ func TestAuth(t *testing.T) {
 // Every failure must use the JSON envelope. A shell that has to sniff for
 // plain-text bodies will get it wrong.
 func TestErrorsAreAlwaysJSON(t *testing.T) {
-	c, _, _ := startDaemon(t, Options{})
+	c, _, _, _ := startDaemon(t, Options{})
 
 	tests := []struct {
 		name       string
@@ -209,10 +210,15 @@ func TestErrorsAreAlwaysJSON(t *testing.T) {
 		path       string
 		wantStatus int
 		wantCode   ErrorCode
+		wantAllow  string
 	}{
-		{"unknown path", http.MethodGet, "/nope", http.StatusNotFound, ErrNotFound},
-		{"unimplemented v1 route", http.MethodPost, "/v1/rewrite", http.StatusNotFound, ErrNotFound},
-		{"wrong method on healthz", http.MethodPost, "/healthz", http.StatusMethodNotAllowed, ErrMethodNotAllowed},
+		{"unknown path", http.MethodGet, "/nope", http.StatusNotFound, ErrNotFound, ""},
+		// Documented in the contract, lands in M3/M4. A shell built against
+		// the contract must get the JSON envelope here, not Go's plain-text
+		// default, so it can tell "not built yet" from "wrong URL".
+		{"contract route not yet served", http.MethodGet, "/v1/presets", http.StatusNotFound, ErrNotFound, ""},
+		{"wrong method on healthz", http.MethodPost, "/healthz", http.StatusMethodNotAllowed, ErrMethodNotAllowed, http.MethodGet},
+		{"wrong method on rewrite", http.MethodGet, "/v1/rewrite", http.StatusMethodNotAllowed, ErrMethodNotAllowed, http.MethodPost},
 	}
 
 	for _, tc := range tests {
@@ -224,9 +230,11 @@ func TestErrorsAreAlwaysJSON(t *testing.T) {
 			if got := decodeError(t, resp).Code; got != tc.wantCode {
 				t.Errorf("code = %q, want %q", got, tc.wantCode)
 			}
-			if tc.wantStatus == http.StatusMethodNotAllowed {
-				if allow := resp.Header.Get("Allow"); allow != http.MethodGet {
-					t.Errorf("Allow = %q, want GET", allow)
+			// A 405 must name the method that would work, or a shell author
+			// is left guessing at the contract.
+			if tc.wantAllow != "" {
+				if allow := resp.Header.Get("Allow"); allow != tc.wantAllow {
+					t.Errorf("Allow = %q, want %q", allow, tc.wantAllow)
 				}
 			}
 		})
@@ -236,7 +244,7 @@ func TestErrorsAreAlwaysJSON(t *testing.T) {
 // Auth must run before routing, so an unauthenticated caller cannot map the
 // daemon's route table by watching 404s and 401s diverge.
 func TestUnknownRouteStillRequiresAuth(t *testing.T) {
-	c, _, _ := startDaemon(t, Options{})
+	c, _, _, _ := startDaemon(t, Options{})
 
 	resp := do(t, c, http.MethodGet, "/nope", "")
 	if resp.StatusCode != http.StatusUnauthorized {
@@ -277,7 +285,7 @@ func TestServeReturnsNilOnContextCancel(t *testing.T) {
 }
 
 func TestIdleExit(t *testing.T) {
-	_, _, done := startDaemon(t, Options{IdleTimeout: 100 * time.Millisecond})
+	_, _, _, done := startDaemon(t, Options{IdleTimeout: 100 * time.Millisecond})
 
 	select {
 	case err := <-done:
@@ -291,7 +299,7 @@ func TestIdleExit(t *testing.T) {
 
 func TestRequestsPostponeIdleExit(t *testing.T) {
 	const idle = 300 * time.Millisecond
-	c, _, done := startDaemon(t, Options{IdleTimeout: idle})
+	c, _, _, done := startDaemon(t, Options{IdleTimeout: idle})
 
 	// Heartbeat across more than one idle window, as the shell does.
 	deadline := time.Now().Add(idle * 2)
@@ -350,4 +358,30 @@ func TestZeroIdleTimeoutNeverExits(t *testing.T) {
 		t.Fatal("idle fired with the timeout disabled")
 	case <-time.After(200 * time.Millisecond):
 	}
+}
+
+// startTestServer is the common case: a running daemon plus its Server, for
+// tests that need to inspect internal counters.
+func startTestServer(t *testing.T) (*http.Client, *Server) {
+	t.Helper()
+	c, _, srv, _ := startDaemon(t, Options{})
+	return c, srv
+}
+
+// doBody issues a request with a JSON body.
+func doBody(t *testing.T, c *http.Client, method, path, token string, body []byte) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(method, "http://starchd"+path, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
+	}
+	return resp
 }

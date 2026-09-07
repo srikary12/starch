@@ -25,6 +25,19 @@ const (
 	// ErrNotImplemented: the route is part of the contract but this daemon
 	// build does not serve it yet.
 	ErrNotImplemented ErrorCode = "not_implemented"
+	// ErrBadRequest: the shell sent something the daemon could not use.
+	ErrBadRequest ErrorCode = "bad_request"
+	// ErrTooLarge: the selection exceeds what the daemon will accept.
+	ErrTooLarge ErrorCode = "selection_too_large"
+	// ErrNoSession: no provider has been configured yet. The shell should
+	// POST /v1/session and retry.
+	ErrNoSession ErrorCode = "no_session"
+	// ErrInternal: a daemon bug.
+	ErrInternal ErrorCode = "internal"
+	// ErrProviderError: an unclassified upstream failure. The specific
+	// provider codes are the provider.Kind values, passed through unchanged so
+	// the two vocabularies never drift.
+	ErrProviderError ErrorCode = "provider_error"
 )
 
 // ErrorBody is the envelope for every non-2xx response.

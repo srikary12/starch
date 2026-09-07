@@ -9,8 +9,11 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/srikary12/starch/internal/provider"
 )
 
 // ErrIdle is returned by Serve when the daemon shut itself down because no
@@ -35,6 +38,10 @@ type Options struct {
 	Logger *slog.Logger
 	// Now is the clock, overridable in tests. Defaults to time.Now.
 	Now func() time.Time
+	// HTTPClient talks to model endpoints. Defaults to provider.NewHTTPClient.
+	// One client is shared across every rewrite on purpose: keeping the
+	// connection warm is most of why a daemon beats spawning per request.
+	HTTPClient *http.Client
 }
 
 // Server serves the wire contract over a net.Listener, normally a Unix domain
@@ -51,6 +58,12 @@ type Server struct {
 	// stream must not look idle just because it started a while ago.
 	lastActive atomic.Int64
 	inFlight   atomic.Int64
+
+	httpClient *http.Client
+
+	// mu guards session. Rewrites read it; /v1/session replaces it.
+	mu      sync.RWMutex
+	session *session
 }
 
 // New builds a Server. It returns an error rather than panicking on a missing
@@ -68,8 +81,17 @@ func New(opts Options) (*Server, error) {
 	if opts.Version == "" {
 		opts.Version = "dev"
 	}
+	if opts.HTTPClient == nil {
+		opts.HTTPClient = provider.NewHTTPClient()
+	}
 
-	s := &Server{opts: opts, log: opts.Logger, now: opts.Now, started: opts.Now()}
+	s := &Server{
+		opts:       opts,
+		log:        opts.Logger,
+		now:        opts.Now,
+		started:    opts.Now(),
+		httpClient: opts.HTTPClient,
+	}
 	s.touch()
 	return s, nil
 }
@@ -82,6 +104,8 @@ func (s *Server) Handler() http.Handler {
 	// that a method mismatch produces the same JSON error envelope as every
 	// other failure. A shell that gets plain text back has hit a bug.
 	mux.HandleFunc("/healthz", only(http.MethodGet, s.handleHealthz))
+	mux.HandleFunc("/"+APIVersion+"/session", only(http.MethodPost, s.handleSession))
+	mux.HandleFunc("/"+APIVersion+"/rewrite", only(http.MethodPost, s.handleRewrite))
 
 	// Catch-all. Anything unrouted, including the /v1 endpoints not yet
 	// implemented, lands here as a JSON 404.
