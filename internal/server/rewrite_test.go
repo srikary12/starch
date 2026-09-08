@@ -501,3 +501,27 @@ func TestSessionRejectsUnknownProviderNamingTheValidOnes(t *testing.T) {
 		}
 	}
 }
+
+// A pasted full request URL — the form every Google example shows — must be
+// normalised, and the echo must report what was actually resolved rather than
+// the raw paste.
+func TestSessionNormalisesAPastedGeminiURL(t *testing.T) {
+	c, _ := startTestServer(t)
+
+	body, _ := json.Marshal(sessionRequest{
+		Provider: ProviderGemini,
+		Model:    "gemini-flash-latest",
+		BaseURL:  "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent",
+		APIKey:   "AIzaSy-test",
+	})
+	resp := doBody(t, c, http.MethodPost, "/v1/session", testToken, body)
+	defer resp.Body.Close()
+
+	var parsed sessionResponse
+	json.NewDecoder(resp.Body).Decode(&parsed)
+
+	const want = "https://generativelanguage.googleapis.com/v1beta"
+	if parsed.Endpoint != want {
+		t.Errorf("endpoint = %q, want %q", parsed.Endpoint, want)
+	}
+}

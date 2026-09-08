@@ -138,6 +138,15 @@ different problems with different fixes.
 Worth documenting for users, too: any Service can be given its own shortcut in
 **System Settings → Keyboard → Keyboard Shortcuts → Services**.
 
+### An LSUIElement app still needs a main menu
+
+No menu bar is shown, so it looks like there is nothing to install. But AppKit
+routes ⌘X/⌘C/⌘V/⌘A/⌘Z through the main menu's key equivalents, and without a
+main menu those keys do nothing in any text field the app owns — including the
+one people paste an API key into. `AppDelegate.installEditMenu` exists for
+that, and Edit cannot be the first item because macOS treats the first as the
+application menu.
+
 ### Accessibility re-prompts on every rebuild
 
 TCC keys the permission grant to the app's code signature. The default build is

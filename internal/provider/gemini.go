@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -31,15 +32,49 @@ type Gemini struct {
 const GeminiDefaultBaseURL = "https://generativelanguage.googleapis.com/v1beta"
 
 func NewGemini(client *http.Client, baseURL, apiKey, model string) *Gemini {
-	if baseURL == "" {
-		baseURL = GeminiDefaultBaseURL
+	normalized := NormalizeGeminiBaseURL(baseURL)
+	if normalized == "" {
+		normalized = GeminiDefaultBaseURL
 	}
 	return &Gemini{
 		client:  client,
-		baseURL: strings.TrimRight(baseURL, "/"),
+		baseURL: normalized,
 		apiKey:  apiKey,
 		model:   model,
 	}
+}
+
+// NormalizeGeminiBaseURL trims a pasted endpoint back to the API root.
+//
+// Every example in Google's documentation is a complete request URL —
+// `.../v1beta/models/gemini-flash-latest:generateContent` — so that is what
+// lands in an "endpoint" field, and appending our own path to it produced a
+// nonsense URL and a 404 that read as "unknown model". Treating the full URL
+// as valid input is not leniency; it is the form users actually have.
+//
+// Any query string is dropped, which also discards a `?key=` some examples
+// use. That is deliberate: the key belongs in the Keychain and goes out as a
+// header, and silently carrying one in from a settings field would put it
+// somewhere neither the app nor the user is tracking.
+func NormalizeGeminiBaseURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	if i := strings.IndexByte(s, '?'); i >= 0 {
+		s = s[:i]
+	}
+	// Everything from /models/ onwards is per-request, not part of the root.
+	if i := strings.Index(s, "/models/"); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.TrimRight(s, "/")
+
+	// A bare host — no path at all — cannot work: the API requires a version
+	// segment. Supply the one this client is written against rather than let
+	// it 404. Anything with a path is left exactly as given, because a custom
+	// gateway's path is not ours to rewrite.
+	if parsed, err := url.Parse(s); err == nil && parsed.Host != "" && parsed.Path == "" {
+		s += "/v1beta"
+	}
+	return s
 }
 
 func (g *Gemini) Name() string { return "Google AI Studio" }

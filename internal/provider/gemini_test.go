@@ -125,14 +125,14 @@ func TestGeminiRequestShape(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := NewGemini(srv.Client(), srv.URL, "sk-goog", "gemini-flash-latest")
+	p := NewGemini(srv.Client(), srv.URL+"/v1beta", "sk-goog", "gemini-flash-latest")
 	deltas, err := p.Stream(context.Background(), Request{System: "be concise", User: "hello"})
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
 	collect(t, deltas)
 
-	if want := "/models/gemini-flash-latest:streamGenerateContent"; gotPath != want {
+	if want := "/v1beta/models/gemini-flash-latest:streamGenerateContent"; gotPath != want {
 		t.Errorf("path = %q, want %q", gotPath, want)
 	}
 	// Without alt=sse the endpoint streams a JSON array, not events.
@@ -181,12 +181,12 @@ func TestGeminiModelNameAcceptsBothForms(t *testing.T) {
 			fmt.Fprint(w, geminiStop)
 		}))
 
-		p := NewGemini(srv.Client(), srv.URL, "k", model)
+		p := NewGemini(srv.Client(), srv.URL+"/v1beta", "k", model)
 		deltas, _ := p.Stream(context.Background(), Request{User: "x"})
 		collect(t, deltas)
 		srv.Close()
 
-		if want := "/models/gemini-flash-latest:streamGenerateContent"; gotPath != want {
+		if want := "/v1beta/models/gemini-flash-latest:streamGenerateContent"; gotPath != want {
 			t.Errorf("model %q gave path %q, want %q", model, gotPath, want)
 		}
 	}
@@ -311,5 +311,101 @@ func TestGeminiErrorMessagesNeverContainTheKey(t *testing.T) {
 		if strings.Contains(err.Error(), key) {
 			t.Errorf("status %d: the API key leaked: %s", status, err.Error())
 		}
+	}
+}
+
+// Every example in Google's docs is a complete request URL, so that is what
+// people paste into an endpoint field. Appending our own path to it produced a
+// 404 that surfaced as "does not recognise that model" — a real report.
+func TestNormalizeGeminiBaseURL(t *testing.T) {
+	const root = "https://generativelanguage.googleapis.com/v1beta"
+
+	tests := []struct{ name, in, want string }{
+		{"already the root", root, root},
+		{"trailing slash", root + "/", root},
+		{
+			name: "the full URL from the docs",
+			in:   root + "/models/gemini-flash-latest:generateContent",
+			want: root,
+		},
+		{
+			name: "the streaming URL",
+			in:   root + "/models/gemini-flash-latest:streamGenerateContent",
+			want: root,
+		},
+		{
+			name: "with alt=sse already on it",
+			in:   root + "/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
+			want: root,
+		},
+		{
+			// Some examples authenticate this way. The key must not survive
+			// into a stored setting.
+			name: "a key in the query string is dropped",
+			in:   root + "/models/gemini-flash-latest:generateContent?key=AIzaSy-SECRET",
+			want: root,
+		},
+		{
+			name: "a bare host gains the version this client speaks",
+			in:   "https://generativelanguage.googleapis.com",
+			want: root,
+		},
+		{"a v1 root is left alone", "https://example.test/v1", "https://example.test/v1"},
+		{"whitespace", "  " + root + "  ", root},
+		{"empty", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizeGeminiBaseURL(tt.in); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// The end-to-end version: a pasted full URL must produce a working request.
+func TestGeminiAcceptsAPastedFullURL(t *testing.T) {
+	var gotPath, gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, geminiStop)
+	}))
+	defer srv.Close()
+
+	pasted := srv.URL + "/v1beta/models/gemini-flash-latest:generateContent"
+	p := NewGemini(srv.Client(), pasted, "k", "gemini-flash-latest")
+	deltas, err := p.Stream(context.Background(), Request{User: "x"})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	collect(t, deltas)
+
+	if want := "/v1beta/models/gemini-flash-latest:streamGenerateContent"; gotPath != want {
+		t.Errorf("path = %q, want %q", gotPath, want)
+	}
+	if gotQuery != "alt=sse" {
+		t.Errorf("query = %q", gotQuery)
+	}
+}
+
+// The key must not be smuggled in through the endpoint field either.
+func TestGeminiDropsAKeyPastedInTheEndpoint(t *testing.T) {
+	const leaked = "AIzaSy-FROM-THE-URL"
+	var rawURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rawURL = r.URL.String()
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, geminiStop)
+	}))
+	defer srv.Close()
+
+	p := NewGemini(srv.Client(), srv.URL+"/v1beta/models/m:generateContent?key="+leaked, "real-key", "m")
+	deltas, _ := p.Stream(context.Background(), Request{User: "x"})
+	collect(t, deltas)
+
+	if strings.Contains(rawURL, leaked) {
+		t.Errorf("a key pasted into the endpoint field reached the request URL: %s", rawURL)
 	}
 }

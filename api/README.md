@@ -143,7 +143,7 @@ uses its own native one and the contract stays identical.
 | `provider` | `base_url` | Notes |
 |---|---|---|
 | `anthropic` | optional | Defaults to `https://api.anthropic.com`. |
-| `gemini` | optional | Google AI Studio. Defaults to `https://generativelanguage.googleapis.com/v1beta`. The key is sent as `X-Goog-Api-Key`, never in the query string. |
+| `gemini` | optional | Google AI Studio. Defaults to `https://generativelanguage.googleapis.com/v1beta`. A full request URL is accepted and trimmed to the root — every Google example is one, so that is what gets pasted. Any `?key=` is discarded; the key belongs in the secret store and goes out as `X-Goog-Api-Key`. |
 | `openai_compatible` | **required** | Must include the endpoint's own version prefix: `https://api.openai.com/v1`, `http://localhost:11434/v1` for Ollama, `http://localhost:1234/v1` for LM Studio. |
 
 `api_key` may be empty for local endpoints.

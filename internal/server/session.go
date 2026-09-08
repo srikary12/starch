@@ -73,7 +73,12 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		prov = provider.NewAnthropic(s.httpClient, endpoint, req.APIKey, req.Model)
 
 	case ProviderGemini:
-		endpoint = req.BaseURL
+		// Normalised here, not just inside the provider, so the endpoint
+		// echoed back is the one actually used. A shell confirming what the
+		// daemon resolved is the entire reason that field exists, and showing
+		// the raw paste would hide exactly the rewriting that fixes a pasted
+		// full request URL.
+		endpoint = provider.NormalizeGeminiBaseURL(req.BaseURL)
 		if endpoint == "" {
 			endpoint = provider.GeminiDefaultBaseURL
 		}

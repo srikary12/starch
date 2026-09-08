@@ -173,6 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBar.onOpenOnboarding = { [weak self] in self?.showOnboarding() }
         menuBar.onRestartDaemon = { [weak self] in self?.restartDaemon() }
 
+        installEditMenu()
         startDaemon()
         registerHotKey()
         registerServices()
@@ -288,6 +289,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 reportCaptureFailure(error)
             }
         }
+    }
+
+    // MARK: Main menu
+
+    /// Installs a main menu carrying the standard edit commands.
+    ///
+    /// An LSUIElement app shows no menu bar, so it is easy to conclude it does
+    /// not need a main menu. It does: AppKit routes ⌘X/⌘C/⌘V/⌘A/⌘Z through the
+    /// main menu's key equivalents, and without one those keys do nothing in
+    /// any text field the app owns. That made it impossible to paste an API
+    /// key into Settings — the one thing that window exists to do.
+    ///
+    /// The items are given no target, so they travel the responder chain to
+    /// whichever field is focused.
+    private func installEditMenu() {
+        let mainMenu = NSMenu()
+
+        // macOS treats the first item as the application menu and will not
+        // show a later one in its place, so Edit cannot be first.
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(
+            withTitle: "Quit \(Brand.name)",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        appItem.submenu = appMenu
+        mainMenu.addItem(appItem)
+
+        let editItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        let commands: [(String, Selector, String, NSEvent.ModifierFlags)] = [
+            ("Undo", Selector(("undo:")), "z", [.command]),
+            ("Redo", Selector(("redo:")), "z", [.command, .shift]),
+            ("Cut", #selector(NSText.cut(_:)), "x", [.command]),
+            ("Copy", #selector(NSText.copy(_:)), "c", [.command]),
+            ("Paste", #selector(NSText.paste(_:)), "v", [.command]),
+            ("Select All", #selector(NSText.selectAll(_:)), "a", [.command]),
+        ]
+        for (title, action, key, modifiers) in commands {
+            if title == "Cut" { editMenu.addItem(.separator()) }
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.keyEquivalentModifierMask = modifiers
+            editMenu.addItem(item)
+        }
+        editItem.submenu = editMenu
+        mainMenu.addItem(editItem)
+
+        NSApp.mainMenu = mainMenu
     }
 
     // MARK: Services
