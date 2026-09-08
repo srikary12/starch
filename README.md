@@ -115,10 +115,10 @@ before you lose an hour to one of them.
 
 Settings live in the menu bar → **Settings…**
 
-- **Provider** — Anthropic, or anything OpenAI-compatible. One implementation
-  covers OpenAI, OpenRouter, Groq, Together, Ollama and LM Studio. Local models
-  matter here: they are the answer for anyone who will not send work messages
-  to a third party.
+- **Provider** — Anthropic, Google AI Studio, or anything OpenAI-compatible.
+  That last one covers OpenAI, OpenRouter, Groq, Together, Ollama and LM Studio
+  with a single implementation. Local models matter here: they are the answer
+  for anyone who will not send work messages to a third party.
 - **API key** — stored in the Keychain. Local endpoints generally do not need
   one.
 - **Shortcut** — default `⌃⌥⌘P`, rebindable.

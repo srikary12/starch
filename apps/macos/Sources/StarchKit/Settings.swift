@@ -110,11 +110,13 @@ public struct Keychain: Sendable {
 /// completions endpoint (OpenAI, OpenRouter, Groq, Together, Ollama, LM Studio).
 public enum ProviderID: String, CaseIterable, Sendable, Codable {
     case anthropic
+    case gemini
     case openAICompatible = "openai_compatible"
 
     public var displayName: String {
         switch self {
         case .anthropic: "Anthropic"
+        case .gemini: "Google AI Studio"
         case .openAICompatible: "OpenAI-compatible"
         }
     }
@@ -122,6 +124,7 @@ public enum ProviderID: String, CaseIterable, Sendable, Codable {
     public var defaultBaseURL: String {
         switch self {
         case .anthropic: "https://api.anthropic.com"
+        case .gemini: "https://generativelanguage.googleapis.com/v1beta"
         case .openAICompatible: "https://api.openai.com/v1"
         }
     }
@@ -129,6 +132,9 @@ public enum ProviderID: String, CaseIterable, Sendable, Codable {
     public var defaultModel: String {
         switch self {
         case .anthropic: "claude-sonnet-5"
+        // Flash rather than Pro: this is an inline rewriter on a 500ms
+        // first-token budget, and the task is not reasoning-heavy.
+        case .gemini: "gemini-flash-latest"
         case .openAICompatible: "gpt-4o-mini"
         }
     }
@@ -142,7 +148,7 @@ public enum ProviderID: String, CaseIterable, Sendable, Codable {
     /// a third party at all.
     public var requiresAPIKey: Bool {
         switch self {
-        case .anthropic: true
+        case .anthropic, .gemini: true
         case .openAICompatible: false
         }
     }

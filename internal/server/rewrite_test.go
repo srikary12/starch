@@ -370,7 +370,7 @@ func TestSessionValidation(t *testing.T) {
 		name string
 		req  sessionRequest
 	}{
-		{"unknown provider", sessionRequest{Provider: "gemini", Model: "m"}},
+		{"unknown provider", sessionRequest{Provider: "palm", Model: "m"}},
 		{"missing model", sessionRequest{Provider: ProviderAnthropic}},
 		{"openai-compatible without an endpoint", sessionRequest{Provider: ProviderOpenAICompatible, Model: "m"}},
 	}
@@ -430,5 +430,74 @@ func TestStreamingCountsAsActivity(t *testing.T) {
 
 	if srv.inFlight.Load() != 0 {
 		t.Errorf("in-flight count leaked: %d", srv.inFlight.Load())
+	}
+}
+
+// Gemini goes through the same routing, so it needs the same end-to-end proof:
+// the daemon builds a valid request, decodes the stream, and terminates.
+func TestRewriteViaGemini(t *testing.T) {
+	var gotQuery, gotKeyHeader string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		gotKeyHeader = r.Header.Get("X-Goog-Api-Key")
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		fmt.Fprint(w, `data: {"candidates":[{"content":{"parts":[{"text":"Thanks for the update."}]}}]}`+"\n\n")
+		flusher.Flush()
+		fmt.Fprint(w, `data: {"candidates":[{"content":{"parts":[{"text":""}]},"finishReason":"STOP"}],`+
+			`"usageMetadata":{"promptTokenCount":31,"candidatesTokenCount":17}}`+"\n\n")
+		flusher.Flush()
+	}))
+	defer upstream.Close()
+
+	c, _ := startTestServer(t)
+	body, _ := json.Marshal(sessionRequest{
+		Provider: ProviderGemini,
+		Model:    "gemini-flash-latest",
+		BaseURL:  upstream.URL,
+		APIKey:   "AIzaSy-test",
+	})
+	resp := doBody(t, c, http.MethodPost, "/v1/session", testToken, body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("session: %d", resp.StatusCode)
+	}
+
+	body, _ = json.Marshal(rewriteRequest{Text: "thanks for teh update", Preset: "professional"})
+	resp = doBody(t, c, http.MethodPost, "/v1/rewrite", testToken, body)
+	defer resp.Body.Close()
+
+	frames := readFrames(t, resp.Body)
+	final := frames[len(frames)-1]
+	if !final.Done {
+		t.Fatal("no terminal event")
+	}
+	if final.Full != "Thanks for the update." {
+		t.Errorf("full = %q", final.Full)
+	}
+	if final.Usage == nil || final.Usage.InputTokens != 31 {
+		t.Errorf("usage = %+v", final.Usage)
+	}
+	// Without alt=sse the endpoint streams a JSON array instead of events.
+	if gotQuery != "alt=sse" {
+		t.Errorf("query = %q, want alt=sse", gotQuery)
+	}
+	if gotKeyHeader != "AIzaSy-test" {
+		t.Errorf("key header = %q", gotKeyHeader)
+	}
+}
+
+func TestSessionRejectsUnknownProviderNamingTheValidOnes(t *testing.T) {
+	c, _ := startTestServer(t)
+	body, _ := json.Marshal(sessionRequest{Provider: "palm", Model: "m"})
+	resp := doBody(t, c, http.MethodPost, "/v1/session", testToken, body)
+	defer resp.Body.Close()
+
+	var envelope ErrorBody
+	json.NewDecoder(resp.Body).Decode(&envelope)
+	for _, name := range []string{"anthropic", "gemini", "openai_compatible"} {
+		if !strings.Contains(envelope.Error.Message, name) {
+			t.Errorf("message does not name %q: %q", name, envelope.Error.Message)
+		}
 	}
 }

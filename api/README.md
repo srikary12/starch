@@ -140,11 +140,19 @@ uses its own native one and the contract stays identical.
 }
 ```
 
-`provider` is `anthropic` or `openai_compatible`. `base_url` is optional for
-`anthropic` and **required** for `openai_compatible`, where it must include the
-endpoint's own version prefix — `https://api.openai.com/v1`,
-`http://localhost:11434/v1` for Ollama, `http://localhost:1234/v1` for LM
-Studio. `api_key` may be empty for local endpoints.
+| `provider` | `base_url` | Notes |
+|---|---|---|
+| `anthropic` | optional | Defaults to `https://api.anthropic.com`. |
+| `gemini` | optional | Google AI Studio. Defaults to `https://generativelanguage.googleapis.com/v1beta`. The key is sent as `X-Goog-Api-Key`, never in the query string. |
+| `openai_compatible` | **required** | Must include the endpoint's own version prefix: `https://api.openai.com/v1`, `http://localhost:11434/v1` for Ollama, `http://localhost:1234/v1` for LM Studio. |
+
+`api_key` may be empty for local endpoints.
+
+Google also publishes an OpenAI-compatible endpoint at
+`https://generativelanguage.googleapis.com/v1beta/openai/`, which works through
+`openai_compatible` with no daemon changes. The native `gemini` provider exists
+because it takes a real system instruction rather than a leading system
+message, and does not depend on a shim tracking two specifications.
 
 **Response `200`**
 

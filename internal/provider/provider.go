@@ -149,8 +149,11 @@ func classify(status int, providerName, detail string) *Error {
 			Retryable: true,
 			Message:   fmt.Sprintf("%s is rate limiting you. Wait a moment and try again.", providerName),
 		}
-	case status == 529:
-		// Anthropic's overloaded status. Not in net/http's constants.
+	case status == http.StatusServiceUnavailable || status == 529:
+		// 503 is the standard "come back later"; 529 is Anthropic's own
+		// overloaded status and is not in net/http's constants. Both mean the
+		// same thing to a user, and "overloaded" is more accurate than "server
+		// error" for either.
 		return &Error{
 			Kind:      KindOverloaded,
 			Status:    status,

@@ -67,7 +67,7 @@ run: app
 install: app
 	@pkill -x $(APP_NAME) 2>/dev/null || true
 	@rm -rf "/Applications/$(APP_NAME).app"
-	@cp -R "$(APP)" /Applications/
+	@mv "$(APP)" /Applications/
 	@$(MAKE) register-services
 	@echo "installed /Applications/$(APP_NAME).app"
 

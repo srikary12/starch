@@ -21,6 +21,7 @@ type ProviderID string
 const (
 	ProviderAnthropic        ProviderID = "anthropic"
 	ProviderOpenAICompatible ProviderID = "openai_compatible"
+	ProviderGemini           ProviderID = "gemini"
 )
 
 type sessionRequest struct {
@@ -71,6 +72,13 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		}
 		prov = provider.NewAnthropic(s.httpClient, endpoint, req.APIKey, req.Model)
 
+	case ProviderGemini:
+		endpoint = req.BaseURL
+		if endpoint == "" {
+			endpoint = provider.GeminiDefaultBaseURL
+		}
+		prov = provider.NewGemini(s.httpClient, endpoint, req.APIKey, req.Model)
+
 	case ProviderOpenAICompatible:
 		endpoint = strings.TrimSpace(req.BaseURL)
 		if endpoint == "" {
@@ -82,7 +90,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		writeError(w, http.StatusBadRequest, ErrBadRequest,
-			"Unknown provider. Use \"anthropic\" or \"openai_compatible\".")
+			"Unknown provider. Use \"anthropic\", \"gemini\" or \"openai_compatible\".")
 		return
 	}
 
