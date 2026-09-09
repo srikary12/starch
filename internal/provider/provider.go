@@ -55,6 +55,12 @@ const DefaultMaxTokens = 2048
 type Usage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
+	// ThoughtTokens is reasoning spend, where the provider separates it.
+	//
+	// Worth reporting rather than folding into output: reasoning is invisible
+	// in the result but is most of the wait, so without this a slow rewrite
+	// looks like a slow network. Zero everywhere that does not report it.
+	ThoughtTokens int `json:"thought_tokens,omitempty"`
 }
 
 // Delta is one increment of a stream. Exactly one delta with Done or Err set

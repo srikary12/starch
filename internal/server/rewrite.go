@@ -114,12 +114,20 @@ func (s *Server) handleRewrite(w http.ResponseWriter, r *http.Request) {
 			stream.send(sseDone{Done: true, Full: cleaned, Usage: delta.Usage})
 
 			// Metadata only: never the selection, never the rewrite.
+			// thought_tokens is here because reasoning is invisible in the
+			// result but can be most of the wait. Without it a slow rewrite
+			// looks like a slow network, and the fix is in the wrong place.
+			thoughts := 0
+			if delta.Usage != nil {
+				thoughts = delta.Usage.ThoughtTokens
+			}
 			s.log.Info("rewrite complete",
 				"preset", preset.ID,
 				"chars_in", len(req.Text),
 				"chars_out", len(cleaned),
 				"first_token_ms", firstByte.Milliseconds(),
 				"total_ms", time.Since(started).Milliseconds(),
+				"thought_tokens", thoughts,
 			)
 			return
 

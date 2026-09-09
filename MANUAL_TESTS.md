@@ -292,11 +292,18 @@ modifier-release wait, and is the one at risk.
 | AX (TextEdit) | | | <500 / <1500 |
 | Clipboard (Chrome) | | | <500 / <1500 |
 
-**Known risk worth measuring first.** Current models run adaptive thinking by
-default, and the daemon does not send a `thinking` parameter. For a two-line
-rewrite that should be near-zero, but if `first_token_ms` is over budget this
-is the first thing to check — the fix is a per-model request tweak, and it is
-deliberately not guessed at before there are numbers.
+**Reasoning is the thing to watch.** The log now carries `thought_tokens`
+alongside the timings, because reasoning is invisible in the result but can be
+most of the wait — without it a slow rewrite looks like a slow network.
+
+Gemini measured 1993ms to first token before any tuning, and now asks for
+`thinkingLevel: "low"`. Re-measure and compare. If `thought_tokens` is still in
+the hundreds, low is not low enough for this task and the next step is
+`minimal` on the models that accept it — `gemini-2.5-flash` rejects `minimal`,
+which is why `low` is the floor today.
+
+Anthropic and OpenAI-compatible endpoints report no thinking tokens, so a zero
+there means "not reported", not "none spent".
 
 ---
 

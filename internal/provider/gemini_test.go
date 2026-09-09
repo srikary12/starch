@@ -409,3 +409,114 @@ func TestGeminiDropsAKeyPastedInTheEndpoint(t *testing.T) {
 		t.Errorf("a key pasted into the endpoint field reached the request URL: %s", rawURL)
 	}
 }
+
+// Rewriting a sentence is not a reasoning task, and current Gemini models
+// think by default — the difference between half a second and two.
+func TestGeminiAsksForTheLowestThinkingLevel(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		buf := make([]byte, r.ContentLength)
+		r.Body.Read(buf)
+		gotBody = string(buf)
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, geminiStop)
+	}))
+	defer srv.Close()
+
+	p := NewGemini(srv.Client(), srv.URL+"/v1beta", "k", "gemini-flash-latest")
+	deltas, _ := p.Stream(context.Background(), Request{User: "x"})
+	collect(t, deltas)
+
+	if !strings.Contains(gotBody, `"thinkingLevel":"low"`) {
+		t.Errorf("no thinkingLevel in the request: %s", gotBody)
+	}
+}
+
+// Older models take thinkingConfig.thinkingBudget and reject thinkingLevel
+// outright. Rather than keep a model table that would rot, ask once and
+// remember — but the first rewrite must still succeed.
+func TestGeminiFallsBackWhenThinkingLevelIsRejected(t *testing.T) {
+	var attempts int
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		buf := make([]byte, r.ContentLength)
+		r.Body.Read(buf)
+		bodies = append(bodies, string(buf))
+
+		if strings.Contains(bodies[len(bodies)-1], "thinkingLevel") {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"error":{"status":"INVALID_ARGUMENT",`+
+				`"message":"Unknown name \"thinkingLevel\" at 'generation_config'"}}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, geminiDelta("Thanks."), geminiStop)
+	}))
+	defer srv.Close()
+
+	p := NewGemini(srv.Client(), srv.URL+"/v1beta", "k", "old-model")
+
+	deltas, err := p.Stream(context.Background(), Request{User: "x"})
+	if err != nil {
+		t.Fatalf("first rewrite failed instead of falling back: %v", err)
+	}
+	text, _, _ := collect(t, deltas)
+	if text != "Thanks." {
+		t.Errorf("got %q", text)
+	}
+	if attempts != 2 {
+		t.Errorf("attempts = %d, want 2 (rejected, then retried without)", attempts)
+	}
+
+	// The cost of discovering this is paid once, not per rewrite.
+	deltas, err = p.Stream(context.Background(), Request{User: "y"})
+	if err != nil {
+		t.Fatalf("second rewrite: %v", err)
+	}
+	collect(t, deltas)
+	if attempts != 3 {
+		t.Errorf("attempts = %d, want 3 — the rejection should be remembered", attempts)
+	}
+	if strings.Contains(bodies[len(bodies)-1], "thinkingLevel") {
+		t.Error("still sending thinkingLevel after it was rejected")
+	}
+}
+
+// A rejection for some other reason must not be mistaken for the field being
+// unsupported, or every bad request silently doubles.
+func TestGeminiDoesNotRetryUnrelatedRejections(t *testing.T) {
+	var attempts int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":{"status":"INVALID_ARGUMENT","message":"contents is required"}}`)
+	}))
+	defer srv.Close()
+
+	p := NewGemini(srv.Client(), srv.URL+"/v1beta", "k", "m")
+	if _, err := p.Stream(context.Background(), Request{User: "x"}); err == nil {
+		t.Fatal("expected an error")
+	}
+	if attempts != 1 {
+		t.Errorf("attempts = %d, want 1", attempts)
+	}
+}
+
+func TestGeminiReportsThoughtTokens(t *testing.T) {
+	for _, field := range []string{"thoughtsTokenCount", "total_thought_tokens"} {
+		stop := fmt.Sprintf(
+			`data: {"candidates":[{"content":{"parts":[{"text":""}]},"finishReason":"STOP"}],`+
+				`"usageMetadata":{"promptTokenCount":31,"candidatesTokenCount":17,%q:412}}`+"\n\n", field)
+		srv := sseServer(t, geminiDelta("hi"), stop)
+
+		p := NewGemini(srv.Client(), srv.URL+"/v1beta", "k", "m")
+		deltas, _ := p.Stream(context.Background(), Request{User: "x"})
+		_, usage, _ := collect(t, deltas)
+		srv.Close()
+
+		if usage == nil || usage.ThoughtTokens != 412 {
+			t.Errorf("%s: thought tokens = %+v, want 412", field, usage)
+		}
+	}
+}

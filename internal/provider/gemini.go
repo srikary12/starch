@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 )
 
 // Gemini speaks the Google AI Studio (Generative Language) REST API.
@@ -26,6 +28,10 @@ type Gemini struct {
 	baseURL string
 	apiKey  string
 	model   string
+
+	// Set once the endpoint rejects thinkingLevel, so the cost of discovering
+	// that is paid a single time per session rather than per rewrite.
+	noThinkingLevel atomic.Bool
 }
 
 // GeminiDefaultBaseURL is the public endpoint, including the version segment.
@@ -79,7 +85,37 @@ func NormalizeGeminiBaseURL(raw string) string {
 
 func (g *Gemini) Name() string { return "Google AI Studio" }
 
+// geminiMinimumThinking is the lowest reasoning level current models accept.
+const geminiMinimumThinking = "low"
+
 func (g *Gemini) Stream(ctx context.Context, req Request) (<-chan Delta, error) {
+	// Older models take thinkingConfig.thinkingBudget instead and reject this
+	// field outright. Rather than maintain a model table that would rot, ask
+	// once and remember the answer for this session.
+	if g.noThinkingLevel.Load() {
+		return g.stream(ctx, req, false)
+	}
+
+	deltas, err := g.stream(ctx, req, true)
+	if err != nil && geminiRejectedThinkingLevel(err) {
+		g.noThinkingLevel.Store(true)
+		return g.stream(ctx, req, false)
+	}
+	return deltas, err
+}
+
+// geminiRejectedThinkingLevel reports whether the endpoint refused the field
+// itself, as opposed to failing for a reason retrying would not fix.
+func geminiRejectedThinkingLevel(err error) bool {
+	var provErr *Error
+	if !errors.As(err, &provErr) || provErr.Kind != KindRequest {
+		return false
+	}
+	lower := strings.ToLower(provErr.Message)
+	return strings.Contains(lower, "thinking") || strings.Contains(lower, "unknown name")
+}
+
+func (g *Gemini) stream(ctx context.Context, req Request, withThinkingLevel bool) (<-chan Delta, error) {
 	model := req.Model
 	if model == "" {
 		model = g.model
@@ -92,11 +128,21 @@ func (g *Gemini) Stream(ctx context.Context, req Request) (<-chan Delta, error) 
 		maxTokens = DefaultMaxTokens
 	}
 
+	generation := map[string]any{"maxOutputTokens": maxTokens}
+	if withThinkingLevel {
+		// Rewriting a sentence is not a reasoning task, and current Gemini
+		// models think by default — which is the difference between a rewrite
+		// arriving in half a second and in two. "low" rather than "minimal":
+		// gemini-2.5-flash rejects minimal, and low is the floor every current
+		// model accepts.
+		generation["thinkingLevel"] = geminiMinimumThinking
+	}
+
 	body := map[string]any{
 		"contents": []map[string]any{
 			{"role": "user", "parts": []map[string]any{{"text": req.User}}},
 		},
-		"generationConfig": map[string]any{"maxOutputTokens": maxTokens},
+		"generationConfig": generation,
 	}
 	if req.System != "" {
 		// A real system instruction, not a first message. This is the main
@@ -174,8 +220,10 @@ type geminiChunk struct {
 	UsageMetadata *struct {
 		PromptTokenCount     int `json:"promptTokenCount"`
 		CandidatesTokenCount int `json:"candidatesTokenCount"`
+		ThoughtsTokenCount   int `json:"thoughtsTokenCount"`
 		TotalInputTokens     int `json:"total_input_tokens"`
 		TotalOutputTokens    int `json:"total_output_tokens"`
+		TotalThoughtTokens   int `json:"total_thought_tokens"`
 	} `json:"usageMetadata"`
 
 	// Set when the *prompt* was refused, as opposed to the generation being
@@ -220,6 +268,7 @@ func newGeminiDecoder() decodeFunc {
 			// Whichever naming the endpoint used; zero from the other.
 			usage.InputTokens = max(u.PromptTokenCount, u.TotalInputTokens)
 			usage.OutputTokens = max(u.CandidatesTokenCount, u.TotalOutputTokens)
+			usage.ThoughtTokens = max(u.ThoughtsTokenCount, u.TotalThoughtTokens)
 		}
 
 		var text strings.Builder
