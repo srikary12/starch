@@ -121,6 +121,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+
+        // Arriving with no key means this window was opened to collect one —
+        // most often straight off the first-run guide. Start in that field
+        // rather than making the user hunt for it.
+        if !keychain.hasSecret(account: preferences.provider.keychainAccount) {
+            window?.makeFirstResponder(apiKeyField)
+        }
     }
 
     // MARK: Layout

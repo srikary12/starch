@@ -51,6 +51,9 @@ python3 -c "import socket;s=socket.socket(socket.AF_UNIX);s.bind('$HOME/Library/
 | 17 | Revoke it in System Settings | Menu line updates to "not granted" within ~1s |
 | 18 | Close onboarding, reopen from the menu | Opens again, shows current state |
 | 19 | Second launch | Onboarding does **not** reappear |
+| 19a | First launch, close the guide (Done **or** the red X) | Settings opens by itself, with the caret already in the API key field |
+| 19b | Reopen the guide later from the menu, close it | Settings does **not** open — that is a different intent |
+| 19c | First launch when a key is already in the Keychain (a reinstall) | Settings still opens, but the caret is not forced into the key field |
 
 ### Hot key
 

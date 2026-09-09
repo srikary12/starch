@@ -174,6 +174,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: SettingsWindowController?
     private var onboardingWindow: OnboardingWindowController?
 
+    /// Set while the first-run guide is on screen.
+    ///
+    /// Closing it then leads straight into Settings, because the guide
+    /// explains what Starch needs and Settings is where it gets it — without a
+    /// key the app cannot do anything at all. Reopening the guide later from
+    /// the menu is a different intent and must not drag Settings along.
+    private var showingFirstRunGuide = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // A mismatch here silently breaks Accessibility grants and Keychain
         // ACLs, both of which are keyed off the bundle identifier.
@@ -199,6 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         accessibilityWatcher.start { [weak self] _ in self?.refreshMenu() }
 
         if !preferences.hasCompletedOnboarding {
+            showingFirstRunGuide = true
             showOnboarding()
         }
     }
@@ -634,6 +643,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.store.save(self.preferences)
                 }
                 self.refreshMenu()
+
+                guard self.showingFirstRunGuide else { return }
+                self.showingFirstRunGuide = false
+                // Deferred by a turn: this runs from windowWillClose, and
+                // opening a window while another is mid-close leaves the new
+                // one ordered behind it.
+                Task { @MainActor [weak self] in
+                    self?.showSettings()
+                }
             }
             onboardingWindow = controller
         }
