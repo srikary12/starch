@@ -525,3 +525,22 @@ func TestSessionNormalisesAPastedGeminiURL(t *testing.T) {
 		t.Errorf("endpoint = %q, want %q", parsed.Endpoint, want)
 	}
 }
+
+// newRecordingServer stands in for a provider and records the system prompt.
+func newRecordingServer(t *testing.T, into *string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			System string `json:"system"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		*into = body.System
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		fmt.Fprint(w, anthropicDelta("ok"))
+		flusher.Flush()
+		fmt.Fprint(w, anthropicStop)
+		flusher.Flush()
+	}))
+}

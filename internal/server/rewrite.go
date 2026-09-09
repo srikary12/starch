@@ -62,7 +62,9 @@ func (s *Server) handleRewrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	preset := prompt.Find(prompt.Defaults, req.Preset)
+	// From the file, not the built-in defaults: an edit to presets.json has to
+	// affect the next rewrite, which is the whole point of it being editable.
+	preset := prompt.Find(s.presets.Load().Presets, req.Preset)
 	system, user := prompt.Build(preset, req.Text, req.Hint)
 
 	// r.Context() is cancelled when the client disconnects, which is exactly

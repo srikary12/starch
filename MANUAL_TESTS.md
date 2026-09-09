@@ -310,3 +310,38 @@ there means "not reported", not "none spent".
 
 ---
 
+---
+
+## M3 — presets
+
+### Already verified automatically
+
+| Check | Result |
+|---|---|
+| File created with the defaults on first read | ✅ |
+| A hand edit applies with no restart | ✅ added a preset, appeared immediately |
+| Broken JSON falls back and names the line | ✅ `line 1, column 3` |
+| A broken file is never overwritten | ✅ |
+| `PUT` validates and replaces | ✅ |
+
+### Needs you
+
+| # | Check | Expected |
+|---|---|---|
+| 71 | Settings → Presets | Shows the count and the full path |
+| 72 | Click *Edit presets.json…* | Opens in your JSON editor |
+| 73 | Click *Show in Finder* | Reveals the file |
+| 74 | Add a preset to the file, save, trigger a rewrite | New preset is in the Tab cycle without restarting |
+| 75 | Tab through every preset during one overlay | Each re-runs against the same selection; the name updates |
+| 76 | Change an instruction, then re-run that preset | Output reflects the new wording |
+| 77 | Delete the preset you currently have selected, then trigger | Falls back to a real preset rather than leaving Tab dead |
+| 78 | Break the JSON deliberately, reopen Settings | Orange warning naming the line; rewriting still works on the built-ins |
+| 79 | Fix the JSON, trigger again | Warning clears, your presets are back |
+| 80 | Delete the file entirely, trigger | Recreated with the five defaults |
+
+Test 77 is the one worth doing deliberately — editing the file mid-session can
+delete the preset the app currently has selected, and that state is easy to
+leave broken.
+
+---
+

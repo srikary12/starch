@@ -88,6 +88,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     var onPreferencesChanged: ((Preferences) -> Void)?
     /// Called when the user asks to see onboarding again.
     var onShowOnboarding: (() -> Void)?
+    /// Asks the delegate for the daemon's current view of presets.json.
+    var presetSet: (() -> (path: String?, count: Int, problem: String?))?
 
     private var preferences: Preferences
     private let store: PreferencesStore
@@ -96,6 +98,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private let providerPopUp = NSPopUpButton()
     private let modelField = UI.textField("", placeholder: "model name")
     private let baseURLField = UI.textField("", placeholder: "https://…")
+    private let presetStatusLabel = UI.secondary("")
+    private let editPresetsButton = NSButton(title: "Edit presets.json…", target: nil, action: nil)
+    private let revealPresetsButton = NSButton(title: "Show in Finder", target: nil, action: nil)
+
     private let apiKeyField = NSSecureTextField()
     private let keyStatusLabel = UI.secondary("")
     private let hotKeyButton = NSButton(title: "", target: nil, action: nil)
@@ -118,6 +124,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     func show() {
         refreshKeyStatus()
+        refreshPresetStatus()
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
@@ -155,6 +162,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         hotKeyButton.widthAnchor.constraint(equalToConstant: 140).isActive = true
 
         debugCheckbox.target = self
+        editPresetsButton.target = self
+        editPresetsButton.action = #selector(editPresets)
+        editPresetsButton.bezelStyle = .rounded
+        revealPresetsButton.target = self
+        revealPresetsButton.action = #selector(revealPresets)
+        revealPresetsButton.bezelStyle = .rounded
         debugCheckbox.action = #selector(debugToggled)
 
         let onboardingButton = NSButton(
@@ -176,6 +189,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             UI.hstack([UI.fieldLabel(""), UI.secondary(
                 "The right-click → \(Brand.name) service can also be given its own shortcut in\n"
                 + "System Settings → Keyboard → Keyboard Shortcuts → Services."
+            )]),
+
+            UI.separator(),
+
+            UI.heading("Presets"),
+            presetStatusLabel,
+            UI.hstack([UI.fieldLabel(""), UI.hstack([editPresetsButton, revealPresetsButton], spacing: 8)]),
+            UI.hstack([UI.fieldLabel(""), UI.secondary(
+                "Edit the file to change the styles Tab cycles through. Changes apply to the\n"
+                + "next rewrite — nothing needs restarting."
             )]),
 
             UI.separator(),
@@ -291,6 +314,42 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         } catch {
             presentError(error, context: "Could not remove the key from the Keychain.")
         }
+    }
+
+    /// Refreshes the preset summary, including any parse failure.
+    ///
+    /// Surfacing the problem here is the point: someone who has just edited
+    /// this file and sees nothing change needs to be told their JSON is
+    /// broken, not left to conclude the feature does not work.
+    func refreshPresetStatus() {
+        let state = presetSet?() ?? (path: nil, count: 0, problem: nil)
+        let available = state.path != nil
+
+        editPresetsButton.isEnabled = available
+        revealPresetsButton.isEnabled = available
+
+        if let problem = state.problem {
+            presetStatusLabel.stringValue = "⚠︎  Using the built-in presets — \(problem)"
+            presetStatusLabel.textColor = .systemOrange
+        } else if let path = state.path {
+            presetStatusLabel.stringValue = "\(state.count) presets · \(path)"
+            presetStatusLabel.textColor = .secondaryLabelColor
+        } else {
+            presetStatusLabel.stringValue = "Waiting for the helper…"
+            presetStatusLabel.textColor = .secondaryLabelColor
+        }
+    }
+
+    @objc private func editPresets() {
+        guard let path = presetSet?().path else { return }
+        // NSWorkspace.open rather than a hard-coded editor: it is the user's
+        // file, and it should open in whatever they use for JSON.
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+    }
+
+    @objc private func revealPresets() {
+        guard let path = presetSet?().path else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
     }
 
     @objc private func showOnboarding() {

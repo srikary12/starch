@@ -52,6 +52,11 @@ func startDaemon(t *testing.T, opts Options) (*http.Client, string, *Server, <-c
 	if opts.Logger == nil {
 		opts.Logger = quietLogger()
 	}
+	if opts.PresetDir == "" {
+		// Never the real support directory: a test run must not rewrite the
+		// developer's own presets.json.
+		opts.PresetDir = t.TempDir()
+	}
 
 	srv, err := New(opts)
 	if err != nil {
@@ -216,7 +221,7 @@ func TestErrorsAreAlwaysJSON(t *testing.T) {
 		// Documented in the contract, lands in M3/M4. A shell built against
 		// the contract must get the JSON envelope here, not Go's plain-text
 		// default, so it can tell "not built yet" from "wrong URL".
-		{"contract route not yet served", http.MethodGet, "/v1/presets", http.StatusNotFound, ErrNotFound, ""},
+		{"contract route not yet served", http.MethodGet, "/v1/accept", http.StatusNotFound, ErrNotFound, ""},
 		{"wrong method on healthz", http.MethodPost, "/healthz", http.StatusMethodNotAllowed, ErrMethodNotAllowed, http.MethodGet},
 		{"wrong method on rewrite", http.MethodGet, "/v1/rewrite", http.StatusMethodNotAllowed, ErrMethodNotAllowed, http.MethodPost},
 	}

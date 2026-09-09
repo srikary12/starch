@@ -303,15 +303,20 @@ public enum Presets {
         Preset(id: "neutral", name: "Neutral business English"),
     ]
 
-    /// Falls back to the default rather than failing: the user is mid-sentence.
-    public static func named(_ id: String) -> Preset {
-        all.first { $0.id == id } ?? all.first { $0.id == defaultID } ?? all[0]
+    /// Falls back rather than failing: the user is mid-sentence.
+    ///
+    /// `list` is what the daemon reported from presets.json; `all` is only the
+    /// seed used before the first fetch comes back.
+    public static func named(_ id: String, in list: [Preset] = all) -> Preset {
+        let list = list.isEmpty ? all : list
+        return list.first { $0.id == id } ?? list.first { $0.id == defaultID } ?? list[0]
     }
 
     /// The next preset in display order, wrapping. Backs Tab in the overlay.
-    public static func next(after id: String) -> String {
-        guard let index = all.firstIndex(where: { $0.id == id }) else { return defaultID }
-        return all[(index + 1) % all.count].id
+    public static func next(after id: String, in list: [Preset] = all) -> String {
+        let list = list.isEmpty ? all : list
+        guard let index = list.firstIndex(where: { $0.id == id }) else { return list[0].id }
+        return list[(index + 1) % list.count].id
     }
 }
 

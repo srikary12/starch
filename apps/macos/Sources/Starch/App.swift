@@ -154,6 +154,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Whether the daemon has been given credentials for the current settings.
     private var sessionReady = false
 
+    /// Presets as the daemon last reported them.
+    ///
+    /// Seeded from the built-in list so the first trigger after launch has
+    /// something to show, then replaced by whatever presets.json actually
+    /// holds. The daemon is the authority; this is a cache so that Tab does
+    /// not wait on a round trip.
+    private var presets: [Preset] = Presets.all
+    private var presetSetPath: String?
+    private var presetProblem: String?
+
     /// API keys read this launch, by Keychain account.
     ///
     /// The daemon holds the key in memory only, so every daemon restart costs
@@ -388,7 +398,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A second trigger replaces the first rather than racing it.
         rewriteTask?.cancel()
 
-        let preset = Presets.named(preferences.presetID)
+        let preset = Presets.named(preferences.presetID, in: presets)
         overlay.begin(presetName: preset.name, near: capture)
 
         overlay.onAccept = { [weak self] text in
@@ -502,6 +512,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 apiKey: apiKey(for: preferences.provider)
             ))
             sessionReady = true
+            await refreshPresets(client: client)
             return true
         } catch {
             overlay.showError(readableMessage(for: error))
@@ -529,6 +540,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
             }
         }
+    }
+
+    /// Pulls the active preset list from the daemon.
+    ///
+    /// Failure is deliberately quiet: the cached list still works, and a
+    /// preset list that could not be refreshed is not worth interrupting a
+    /// rewrite the user is waiting on.
+    private func refreshPresets(client: DaemonClient) async {
+        guard let set = try? await client.presets() else { return }
+
+        presets = set.presets
+        presetSetPath = set.path
+        presetProblem = set.problem
+
+        if let problem = set.problem {
+            Log.app.error("presets.json could not be used: \(problem, privacy: .public)")
+        }
+        // A preset that no longer exists — the file was edited, or an id was
+        // renamed — must not leave Tab cycling from nowhere.
+        if !presets.contains(where: { $0.id == preferences.presetID }), let first = presets.first {
+            preferences.presetID = first.id
+            store.save(preferences)
+        }
+        refreshMenu()
+        settingsWindow?.refreshPresetStatus()
     }
 
     /// The key for a provider, read from the Keychain at most once per launch.
@@ -564,7 +600,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func cyclePreset(for capture: SelectionCapturer.Capture) {
-        preferences.presetID = Presets.next(after: preferences.presetID)
+        preferences.presetID = Presets.next(after: preferences.presetID, in: presets)
         store.save(preferences)
         refreshMenu()
         beginRewrite(with: capture)
@@ -628,6 +664,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.applyPreferences(updated)
             }
             controller.onShowOnboarding = { [weak self] in self?.showOnboarding() }
+            controller.presetSet = { [weak self] in
+                (path: self?.presetSetPath, count: self?.presets.count ?? 0, problem: self?.presetProblem)
+            }
             settingsWindow = controller
         }
         settingsWindow?.show()

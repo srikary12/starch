@@ -221,10 +221,38 @@ Documented for shell authors. Not served yet.
 
 Feeds the local voice profile. Never leaves the machine.
 
-### `GET /v1/presets`, `PUT /v1/presets` *(M3)*
+### `GET /v1/presets` — the active preset set *(M3)*
 
-Read and replace the preset set, backed by
-`~/Library/Application Support/Starch/presets.json`.
+```json
+{
+  "presets": [{"id": "concise", "name": "Concise", "instruction": "Cut it down. …"}],
+  "path": "/Users/you/Library/Application Support/Starch/presets.json",
+  "source": "file",
+  "problem": null
+}
+```
+
+The file is created with the defaults the first time this is called, so there
+is always something to open. It is re-read whenever it changes, so a hand edit
+affects the next rewrite with nothing restarted.
+
+`source` is `file` or `defaults`. A `problem` means the file exists but could
+not be used — the defaults are standing in, and a shell should say so rather
+than leaving someone who just edited it to conclude the feature is broken.
+Syntax errors carry a line and column, because a byte offset is useless to
+someone editing by hand.
+
+A broken file is never overwritten. Someone's work in progress is worth more
+than our defaults.
+
+### `PUT /v1/presets` — replace the set *(M3)*
+
+Takes the same `{"presets": [...]}` shape and responds with the new `GET` body.
+
+Rejected with `400 bad_request` if the set is empty, exceeds 64 entries, has an
+entry missing an `id`, `name` or `instruction`, or repeats an `id`. The message
+is written for a person and can be shown as-is. A rejected write leaves both
+the file and the active set untouched.
 
 ---
 

@@ -301,3 +301,69 @@ struct DaemonProcessTests {
         #expect(DaemonProcess.heartbeatInterval < DaemonProcess.idleTimeout / 3)
     }
 }
+
+@Suite("Presets")
+struct PresetListTests {
+    private let fromFile = [
+        Preset(id: "pirate", name: "Pirate"),
+        Preset(id: "terse", name: "Terse"),
+    ]
+
+    @Test("cycling walks the daemon's list, not the built-in one")
+    func cyclesTheFetchedList() {
+        #expect(Presets.next(after: "pirate", in: fromFile) == "terse")
+        // And wraps.
+        #expect(Presets.next(after: "terse", in: fromFile) == "pirate")
+    }
+
+    /// A preset can vanish when the file is edited mid-session. Cycling from
+    /// an id that is no longer there must land somewhere real rather than
+    /// leaving Tab dead.
+    @Test("an unknown id cycles into the list rather than nowhere")
+    func unknownIdRecovers() {
+        #expect(Presets.next(after: "deleted", in: fromFile) == "pirate")
+        #expect(Presets.named("deleted", in: fromFile).id == "pirate")
+    }
+
+    @Test("an empty list falls back to the built-ins instead of crashing")
+    func emptyListFallsBack() {
+        #expect(Presets.named("anything", in: []).id == Presets.defaultID)
+        // An id that is not in the list lands on the first entry, which is
+        // where cycling should resume when the current preset was deleted.
+        #expect(Presets.next(after: "anything", in: []) == Presets.all[0].id)
+        #expect(Presets.next(after: Presets.all[0].id, in: []) == Presets.all[1].id)
+    }
+
+    @Test("a known id resolves to its own entry")
+    func knownId() {
+        #expect(Presets.named("terse", in: fromFile).name == "Terse")
+    }
+
+    /// The shell decodes only id and name. Instruction text is the daemon's,
+    /// so it cannot drift between the two.
+    @Test("decoding ignores the instruction")
+    func decodesIdAndNameOnly() throws {
+        let json = Data("""
+        {"presets":[{"id":"a","name":"A","instruction":"ignored here"}],
+         "path":"/tmp/presets.json","source":"file"}
+        """.utf8)
+
+        let set = try JSONDecoder().decode(PresetSet.self, from: json)
+        #expect(set.presets.count == 1)
+        #expect(set.presets[0].id == "a")
+        #expect(set.usingDefaults == false)
+        #expect(set.problem == nil)
+    }
+
+    @Test("a reported problem is surfaced, not swallowed")
+    func decodesProblem() throws {
+        let json = Data("""
+        {"presets":[{"id":"a","name":"A"}],"path":"/tmp/p.json",
+         "source":"defaults","problem":"presets.json is not valid JSON (line 3)"}
+        """.utf8)
+
+        let set = try JSONDecoder().decode(PresetSet.self, from: json)
+        #expect(set.usingDefaults)
+        #expect(set.problem?.contains("line 3") == true)
+    }
+}

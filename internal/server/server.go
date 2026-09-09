@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/srikary12/starch/internal/config"
+	"github.com/srikary12/starch/internal/prompt"
 	"github.com/srikary12/starch/internal/provider"
 )
 
@@ -38,6 +40,9 @@ type Options struct {
 	Logger *slog.Logger
 	// Now is the clock, overridable in tests. Defaults to time.Now.
 	Now func() time.Time
+	// PresetDir holds presets.json. Defaults to the support directory; tests
+	// point it at a temporary one.
+	PresetDir string
 	// HTTPClient talks to model endpoints. Defaults to provider.NewHTTPClient.
 	// One client is shared across every rewrite on purpose: keeping the
 	// connection warm is most of why a daemon beats spawning per request.
@@ -60,6 +65,7 @@ type Server struct {
 	inFlight   atomic.Int64
 
 	httpClient *http.Client
+	presets    *prompt.Store
 
 	// mu guards session. Rewrites read it; /v1/session replaces it.
 	mu      sync.RWMutex
@@ -84,6 +90,13 @@ func New(opts Options) (*Server, error) {
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = provider.NewHTTPClient()
 	}
+	if opts.PresetDir == "" {
+		dir, err := config.SupportDir()
+		if err != nil {
+			return nil, fmt.Errorf("server: resolving the support directory: %w", err)
+		}
+		opts.PresetDir = dir
+	}
 
 	s := &Server{
 		opts:       opts,
@@ -91,6 +104,7 @@ func New(opts Options) (*Server, error) {
 		now:        opts.Now,
 		started:    opts.Now(),
 		httpClient: opts.HTTPClient,
+		presets:    prompt.NewStore(opts.PresetDir),
 	}
 	s.touch()
 	return s, nil
@@ -106,6 +120,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", only(http.MethodGet, s.handleHealthz))
 	mux.HandleFunc("/"+APIVersion+"/session", only(http.MethodPost, s.handleSession))
 	mux.HandleFunc("/"+APIVersion+"/rewrite", only(http.MethodPost, s.handleRewrite))
+	mux.HandleFunc("/"+APIVersion+"/presets", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			s.handleGetPresets(w, r)
+		case http.MethodPut:
+			s.handlePutPresets(w, r)
+		default:
+			w.Header().Set("Allow", "GET, PUT")
+			writeError(w, http.StatusMethodNotAllowed, ErrMethodNotAllowed,
+				"This endpoint accepts GET and PUT.")
+		}
+	})
 
 	// Catch-all. Anything unrouted, including the /v1 endpoints not yet
 	// implemented, lands here as a JSON 404.

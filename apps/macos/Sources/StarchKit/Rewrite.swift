@@ -156,7 +156,58 @@ public struct SessionResponse: Sendable, Equatable, Decodable {
     public let endpoint: String
 }
 
+/// The daemon's view of the preset file. See api/README.md.
+public struct PresetSet: Sendable, Equatable, Decodable {
+    public let presets: [Preset]
+    /// Where presets.json lives, so the shell can offer to open it rather than
+    /// making people hunt for a path.
+    public let path: String
+    /// "file" or "defaults".
+    public let source: String
+    /// Why the file was not used, when it exists but could not be read.
+    public let problem: String?
+
+    public var usingDefaults: Bool { source == "defaults" }
+}
+
+extension Preset: Decodable {
+    // Only id and name are decoded. The instruction is the daemon's business:
+    // a shell that carried prompt text would be a second place for it to drift.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decode(String.self, forKey: .id),
+            name: try container.decode(String.self, forKey: .name)
+        )
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, name }
+}
+
 extension DaemonClient {
+    /// Fetches the active presets.
+    ///
+    /// Fetched rather than hard-coded so that editing presets.json shows up in
+    /// the overlay and in Tab cycling without the app being rebuilt.
+    public func presets(timeout: TimeInterval = 3.0) async throws -> PresetSet {
+        let request = HTTPRequest(
+            method: "GET",
+            path: "/\(Self.apiVersion)/presets",
+            headers: [HTTPHeader("Authorization", "Bearer \(token)")]
+        )
+        let (head, body) = try await UnixHTTPClient(socketPath: socketPath)
+            .perform(request, timeout: timeout)
+
+        guard head.statusCode == 200 else {
+            throw Self.daemonError(from: head, body: body)
+        }
+        do {
+            return try JSONDecoder().decode(PresetSet.self, from: body)
+        } catch {
+            throw DaemonError.decoding(error.localizedDescription)
+        }
+    }
+
     /// Hands the provider configuration and API key to the daemon.
     ///
     /// This is the only place the key crosses a process boundary. It goes over

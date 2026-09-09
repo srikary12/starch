@@ -11,10 +11,10 @@ and it is only worth using if it is faster than that loop.
 Bring your own API key. There is no account, no hosted backend, and no
 telemetry.
 
-> **Status: pre-release (M2).** The loop works end to end: select text, press
+> **Status: pre-release (M3).** The loop works end to end: select text, press
 > the shortcut, watch the rewrite stream into an overlay, press Return to
-> replace it in place. Bring your own key. Presets are not yet editable and
-> there is no voice profile — see [Roadmap](#roadmap).
+> replace it in place. Five presets, editable as JSON, cycled with Tab. Bring
+> your own key. No voice profile yet — see [Roadmap](#roadmap).
 
 ---
 
@@ -125,8 +125,12 @@ Settings live in the menu bar → **Settings…**
   one.
 - **Shortcut** — default `⌃⌥⌘P`, rebindable.
 
-Presets will be editable JSON at
-`~/Library/Application Support/Starch/presets.json` (M3).
+- **Presets** — editable JSON at
+  `~/Library/Application Support/Starch/presets.json`. Settings has buttons to
+  open it or reveal it in Finder. The file is created with the five defaults on
+  first run, and an edit applies to the next rewrite without restarting
+  anything. Break the JSON and Starch keeps working on the built-in presets,
+  telling you which line is wrong.
 
 ---
 
@@ -160,7 +164,7 @@ service its own keyboard shortcut on that same screen.
 | **M0** | Two skeletons — daemon, menu bar app, handshake, hotkey, onboarding | ✅ done |
 | **M1** | Text capture: Accessibility path plus clipboard fallback, both triggers | ✅ done |
 | **M2** | The loop: providers, streaming rewrite, overlay, replace in place | ✅ done |
-| **M3** | Presets, including a neutral-business-English one | |
+| **M3** | Presets, including a neutral-business-English one | ✅ done |
 | **M4** | Local voice profile — output that sounds like you, not like an LLM | |
 | **M5** | Notarised DMG and a Homebrew cask | |
 
