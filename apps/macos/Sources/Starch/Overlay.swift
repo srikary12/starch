@@ -11,6 +11,23 @@ import StarchKit
 // replacement has nowhere to land. And it must never replace text silently:
 // the user sees the rewrite before it lands, every time.
 
+/// The overlay's window.
+///
+/// `canBecomeKey` has to be overridden. A borderless panel returns false by
+/// default, and a panel that cannot become key receives no keyboard input at
+/// all — which is the difference between Return accepting the rewrite and
+/// Return doing nothing until you click the panel first.
+///
+/// Combined with `.nonactivatingPanel`, this is the arrangement that lets the
+/// panel take keystrokes while the app the user was typing in stays the active
+/// application, and therefore stays the target for the replacement.
+private final class OverlayPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    // Deliberately not main: becoming the main window would make Starch look
+    // like the foreground app and move the frontmost-application target.
+    override var canBecomeMain: Bool { false }
+}
+
 @MainActor
 final class OverlayController {
     enum Outcome {
@@ -25,7 +42,7 @@ final class OverlayController {
     /// Called when the user asks for a different preset.
     var onCyclePreset: (() -> Void)?
 
-    private let panel: NSPanel
+    private let panel: OverlayPanel
     private let textView = NSTextView()
     private let scrollView = NSScrollView()
     private let presetLabel = UI.secondary("")
@@ -40,7 +57,7 @@ final class OverlayController {
         // .nonactivatingPanel is the whole trick: the panel can show and take
         // clicks without its application becoming active, so the app the user
         // was typing in stays frontmost and stays the paste target.
-        panel = NSPanel(
+        panel = OverlayPanel(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 160),
             styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
             backing: .buffered,
@@ -49,7 +66,11 @@ final class OverlayController {
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.hidesOnDeactivate = false
-        panel.becomesKeyOnlyIfNeeded = true
+        // Must stay false. becomesKeyOnlyIfNeeded lets a panel decline key
+        // status unless a view actually wants text input, and the text view
+        // here is read-only — so leaving it true would quietly undo
+        // makeKeyAndOrderFront and put Return back to doing nothing.
+        panel.becomesKeyOnlyIfNeeded = false
         panel.worksWhenModal = true
         panel.isMovableByWindowBackground = true
         panel.backgroundColor = .clear
@@ -123,9 +144,18 @@ final class OverlayController {
         spinner.startAnimation(nil)
 
         position(near: capture)
-        // orderFrontRegardless, not makeKeyAndOrderFront: the latter would
-        // activate this app and lose the source app's focus.
-        panel.orderFrontRegardless()
+
+        // makeKeyAndOrderFront, not orderFrontRegardless. A non-activating
+        // panel becomes key *without* activating its application, so the
+        // source app stays frontmost and stays the paste target — while the
+        // keystrokes come here.
+        //
+        // orderFrontRegardless was the earlier attempt and looked right, but
+        // it left the panel unable to receive keys: a local event monitor only
+        // sees events delivered to this application, and with Starch never
+        // active none ever were. Return did nothing until the panel was
+        // clicked, which activated the app by hand.
+        panel.makeKeyAndOrderFront(nil)
         installKeyMonitor()
     }
 
@@ -160,6 +190,10 @@ final class OverlayController {
     func hide() {
         removeKeyMonitor()
         spinner.stopAnimation(nil)
+        // resignKey before ordering out: the panel held key status, and simply
+        // hiding it can leave the source app without a key window, so its
+        // caret stays dead until it is clicked.
+        panel.resignKey()
         panel.orderOut(nil)
     }
 
@@ -167,9 +201,11 @@ final class OverlayController {
 
     // MARK: Keyboard
 
-    /// The panel is not key, so it receives no keystrokes through the
-    /// responder chain. A local monitor is the way to get them — it sees
-    /// events destined for this app before they are dispatched.
+    /// Intercepts the overlay's keys before the panel's own views see them.
+    ///
+    /// The panel is key by this point, so events do reach this application; the
+    /// monitor exists so the non-editable text view cannot swallow Return or
+    /// Tab first.
     private func installKeyMonitor() {
         removeKeyMonitor()
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in

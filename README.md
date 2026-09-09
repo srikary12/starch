@@ -31,7 +31,9 @@ being true, that is a bug worth filing.
 - **Your key stays in the Keychain.** It is never written to `UserDefaults`,
   never written to disk by the Go layer, and never logged. The helper process
   receives it over a local socket and holds it in memory only, for the lifetime
-  of that process.
+  of that process. The app keeps a copy in memory too, for its own lifetime, so
+  that a helper restart does not mean a Keychain prompt mid-sentence — both are
+  process memory, and neither is ever written anywhere.
 - **Your text goes to one place: the endpoint you configured.** Nowhere else.
   Point it at a local Ollama or LM Studio instance and nothing leaves the
   machine at all.

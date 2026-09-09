@@ -286,6 +286,26 @@ private final class StreamingExchange: @unchecked Sendable {
         }
     }
 
+    /// Describes an NWError in terms that are true of a Unix socket.
+    ///
+    /// The POSIX strings are written for IP networking and actively mislead
+    /// here: ENETDOWN surfaces as "Network is down", which sends someone off
+    /// to check their wifi when what actually happened is that the helper was
+    /// restarting and its socket was momentarily gone.
+    private static func describe(_ error: NWError) -> String {
+        if case let .posix(code) = error {
+            switch code {
+            case .ENETDOWN, .ENOENT, .ECONNREFUSED, .ECONNRESET, .EPIPE:
+                return "the helper is not listening"
+            case .EACCES, .EPERM:
+                return "permission was denied on the helper's socket"
+            default:
+                break
+            }
+        }
+        return error.localizedDescription
+    }
+
     private func begin() {
         connection.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
@@ -293,7 +313,13 @@ private final class StreamingExchange: @unchecked Sendable {
             case .ready:
                 self.send()
             case let .failed(error):
-                self.fail(.transport(error.localizedDescription))
+                self.fail(.transport(Self.describe(error)))
+            case let .waiting(error):
+                // A Unix socket does not wait for a route to appear. Without
+                // this the connection sits in .waiting indefinitely and, since
+                // this exchange has no timeout of its own, the overlay spins
+                // forever with no error.
+                self.fail(.transport(Self.describe(error)))
             case .cancelled:
                 self.complete()
             default:
@@ -314,7 +340,7 @@ private final class StreamingExchange: @unchecked Sendable {
         connection.send(content: bytes, completion: .contentProcessed { [weak self] error in
             guard let self else { return }
             if let error {
-                self.fail(.transport(error.localizedDescription))
+                self.fail(.transport(Self.describe(error)))
                 return
             }
             self.receive()
@@ -327,7 +353,7 @@ private final class StreamingExchange: @unchecked Sendable {
             guard let self else { return }
 
             if let error {
-                self.fail(.transport(error.localizedDescription))
+                self.fail(.transport(Self.describe(error)))
                 return
             }
             if let data, !data.isEmpty {

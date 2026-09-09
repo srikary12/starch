@@ -154,6 +154,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Whether the daemon has been given credentials for the current settings.
     private var sessionReady = false
 
+    /// API keys read this launch, by Keychain account.
+    ///
+    /// The daemon holds the key in memory only, so every daemon restart costs
+    /// a re-handshake — and each of those used to be a fresh Keychain read.
+    /// Under an unstable signing identity that means a password prompt roughly
+    /// per rewrite, which is fatal to a tool whose entire claim is being faster
+    /// than switching to a browser tab. A modal prompt is slower than the loop
+    /// this replaces.
+    ///
+    /// The security cost is close to nothing: the key is already resident for
+    /// the daemon's whole lifetime, so this makes it resident in two processes
+    /// rather than one, and anyone who can read our memory can read the
+    /// daemon's. Cleared whenever the user changes credentials.
+    private var keyCache: [String: String] = [:]
+
     private var preferences = Preferences()
     private var daemon: DaemonProcess?
     private var settingsWindow: SettingsWindowController?
@@ -399,25 +414,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             try await runStream(client: client, capture: capture, preset: preset)
-        } catch let error as DaemonError {
-            // The daemon lost its session — it restarted, or the supervisor
-            // replaced it after a crash. Re-handshake and try once more rather
-            // than making the user trigger again for something invisible.
-            if case let .api(_, code, _) = error, code == "no_session" {
-                sessionReady = false
-                guard await establishSession(client: client) else { return }
-                do {
-                    try await runStream(client: client, capture: capture, preset: preset)
-                } catch {
-                    overlay.showError(readableMessage(for: error))
-                }
+        } catch let error as DaemonError where Self.isRecoverable(error) {
+            // The daemon went away mid-request. It restarts in well under a
+            // second — the supervisor respawns it, and Settings changes restart
+            // it deliberately — so the window where this happens is small and
+            // entirely invisible to the user. Surfacing it would be blaming
+            // them for our own lifecycle.
+            Log.capture.info("daemon unavailable; re-handshaking and retrying once")
+            sessionReady = false
+
+            // Give the supervisor time to bring it back before trying again.
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+
+            guard let retryClient = daemon?.client, await establishSession(client: retryClient) else {
                 return
             }
-            overlay.showError(readableMessage(for: error))
+            do {
+                try await runStream(client: retryClient, capture: capture, preset: preset)
+            } catch is CancellationError {
+                overlay.hide()
+            } catch {
+                overlay.showError(readableMessage(for: error))
+            }
         } catch is CancellationError {
             overlay.hide()
         } catch {
             overlay.showError(readableMessage(for: error))
+        }
+    }
+
+    /// Whether a failure is the daemon being momentarily absent rather than
+    /// something the user needs to act on.
+    private static func isRecoverable(_ error: DaemonError) -> Bool {
+        switch error {
+        case let .api(_, code, _):
+            // Its session died with it; the key lives only in its memory.
+            code == "no_session"
+        case .transport, .timedOut:
+            // Restarting, so its socket is briefly gone.
+            true
+        default:
+            false
         }
     }
 
@@ -447,17 +485,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func establishSession(client: DaemonClient) async -> Bool {
-        // keychainAccount, not rawValue: Settings writes under the former, and
-        // reading the wrong account silently finds no key and looks to the user
-        // like their saved key was ignored.
-        let key = (try? keychain.get(account: preferences.provider.keychainAccount)) ?? nil
-
         do {
             _ = try await client.startSession(SessionRequest(
                 provider: preferences.provider.rawValue,
                 model: preferences.model,
                 baseURL: preferences.baseURL,
-                apiKey: key ?? ""
+                apiKey: apiKey(for: preferences.provider)
             ))
             sessionReady = true
             return true
@@ -489,12 +522,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The key for a provider, read from the Keychain at most once per launch.
+    ///
+    /// keychainAccount, not rawValue: Settings writes under the former, and
+    /// reading the wrong account silently finds no key and looks to the user
+    /// like their saved key was ignored.
+    private func apiKey(for provider: ProviderID) -> String {
+        let account = provider.keychainAccount
+        if let cached = keyCache[account] { return cached }
+
+        let key = ((try? keychain.get(account: account)) ?? nil) ?? ""
+        keyCache[account] = key
+        return key
+    }
+
     /// Drops the daemon's session so the next rewrite re-sends credentials.
     ///
-    /// Without this, changing provider or pasting a new key in Settings would
-    /// have no effect until the app restarted — the daemon would keep using
-    /// whatever it was handed first.
+    /// Deliberately does not clear the key cache. This fires on the common,
+    /// invisible path — a daemon restart — and re-reading the Keychain there is
+    /// what produced a password prompt per rewrite.
     func invalidateSession() {
+        sessionReady = false
+    }
+
+    /// Drops both the session and the cached key.
+    ///
+    /// For user-initiated credential changes only, where one Keychain read is
+    /// expected and correct.
+    private func invalidateCredentials() {
+        keyCache.removeAll()
         sessionReady = false
     }
 
@@ -531,6 +587,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return message
             case .unauthorized:
                 return "The helper rejected the handshake. Try Restart Helper."
+            case .transport, .timedOut:
+                // Never the POSIX text: "Network is down" for a Unix socket
+                // sends people to check their wifi.
+                return "The helper isn't responding. Try Restart Helper from the menu."
             default:
                 return daemonError.localizedDescription
             }
@@ -593,9 +653,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             restartDaemon()
         }
         // Any settings change may have altered the credentials, including a
-        // new key saved under the same provider. Re-handshaking is cheap and a
-        // stale session is invisible until a rewrite fails.
-        invalidateSession()
+        // new key saved under the same provider — Settings routes key saves and
+        // removals through here for exactly that reason. This is the one path
+        // where re-reading the Keychain is warranted.
+        invalidateCredentials()
         refreshMenu()
     }
 
