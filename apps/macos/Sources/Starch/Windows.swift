@@ -14,6 +14,12 @@ enum UI {
         field.textColor = color
         field.lineBreakMode = .byWordWrapping
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // NSTextField(labelWithString:) is not selectable by default, which
+        // makes the two labels people most need — the presets path and a JSON
+        // parse error naming a line — impossible to copy out of the window.
+        // Selectable everywhere rather than case by case: a label worth
+        // reading is a label worth copying, and it costs nothing.
+        field.isSelectable = true
         return field
     }
 

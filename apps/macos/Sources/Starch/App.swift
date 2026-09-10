@@ -266,7 +266,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             socketPath: socketPath,
             debug: preferences.debugLogging
         )
-        daemon.onStatusChange = { [weak self] _ in self?.refreshMenu() }
+        daemon.onStatusChange = { [weak self] status in
+            self?.refreshMenu()
+            // The preset list lives behind the daemon, so it cannot be read
+            // until one is up. Status only changes on a real transition —
+            // uptime is deliberately excluded from Status's == — so this fires
+            // once per daemon start, not on every heartbeat.
+            if status.isHealthy { self?.refreshPresetsFromDaemon() }
+        }
         self.daemon = daemon
         daemon.start()
     }
@@ -547,6 +554,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Failure is deliberately quiet: the cached list still works, and a
     /// preset list that could not be refreshed is not worth interrupting a
     /// rewrite the user is waiting on.
+    /// Reads the preset list from the daemon whenever one is reachable.
+    ///
+    /// Separate from establishSession because `/v1/presets` needs no session
+    /// and no API key. Hanging the only refresh off the session meant Settings
+    /// showed "Waiting for the helper…" — with Edit and Show in Finder both
+    /// disabled — until the user had run a rewrite, which is backwards: the
+    /// window exists to be opened before the first rewrite, not after.
+    private func refreshPresetsFromDaemon() {
+        guard let client = daemon?.client else { return }
+        Task { @MainActor [weak self] in
+            await self?.refreshPresets(client: client)
+        }
+    }
+
     private func refreshPresets(client: DaemonClient) async {
         guard let set = try? await client.presets() else { return }
 
@@ -669,6 +690,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             settingsWindow = controller
         }
+        // Re-read on every open. Someone who has just fixed their JSON expects
+        // the warning to be gone when they come back to look, and the daemon
+        // re-parses on the next read, so this is the whole of that story.
+        refreshPresetsFromDaemon()
         settingsWindow?.show()
     }
 
