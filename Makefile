@@ -37,8 +37,8 @@ build: app
 daemon:
 	@mkdir -p $(BUILD_DIR)
 ifeq ($(ARCH),universal)
-	@# CGO_ENABLED=0 keeps cross-compilation to Windows and Linux a one-liner
-	@# and is what lets us use the pure-Go SQLite driver later.
+	@# CGO_ENABLED=0 keeps cross-compilation to Windows and Linux a one-liner,
+	@# and constrains any future dependency to pure Go for the same reason.
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$(GO_LDFLAGS)" -o $(BUILD_DIR)/starchd-arm64 ./cmd/starchd
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$(GO_LDFLAGS)" -o $(BUILD_DIR)/starchd-amd64 ./cmd/starchd
 	lipo -create -output $(DAEMON) $(BUILD_DIR)/starchd-arm64 $(BUILD_DIR)/starchd-amd64

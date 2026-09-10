@@ -53,8 +53,7 @@ type Config struct {
 // ErrNoToken reports that the required handshake token was not supplied.
 var ErrNoToken = errors.New("no handshake token: " + EnvToken + " must be set by the parent process")
 
-// SupportDir returns the per-user directory holding the socket, presets and
-// the voice-profile database.
+// SupportDir returns the per-user directory holding the socket and presets.
 func SupportDir() (string, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {

@@ -218,10 +218,11 @@ func TestErrorsAreAlwaysJSON(t *testing.T) {
 		wantAllow  string
 	}{
 		{"unknown path", http.MethodGet, "/nope", http.StatusNotFound, ErrNotFound, ""},
-		// Documented in the contract, lands in M3/M4. A shell built against
-		// the contract must get the JSON envelope here, not Go's plain-text
-		// default, so it can tell "not built yet" from "wrong URL".
-		{"contract route not yet served", http.MethodGet, "/v1/accept", http.StatusNotFound, ErrNotFound, ""},
+		// A versioned path that does not exist must still answer in the
+		// envelope rather than Go's plain-text default, so a shell built
+		// against a newer contract can tell "this daemon is older" from
+		// "wrong URL".
+		{"unserved v1 route", http.MethodGet, "/v1/nope", http.StatusNotFound, ErrNotFound, ""},
 		{"wrong method on healthz", http.MethodPost, "/healthz", http.StatusMethodNotAllowed, ErrMethodNotAllowed, http.MethodGet},
 		{"wrong method on rewrite", http.MethodGet, "/v1/rewrite", http.StatusMethodNotAllowed, ErrMethodNotAllowed, http.MethodPost},
 	}

@@ -14,7 +14,7 @@ telemetry.
 > **Status: pre-release (M3).** The loop works end to end: select text, press
 > the shortcut, watch the rewrite stream into an overlay, press Return to
 > replace it in place. Five presets, editable as JSON, cycled with Tab. Bring
-> your own key. No voice profile yet — see [Roadmap](#roadmap).
+> your own key. Packaging is the remaining work — see [Roadmap](#roadmap).
 
 ---
 
@@ -37,9 +37,10 @@ being true, that is a bug worth filing.
 - **Your text goes to one place: the endpoint you configured.** Nowhere else.
   Point it at a local Ollama or LM Studio instance and nothing leaves the
   machine at all.
-- **The voice profile is local.** Accepted rewrites are stored in a SQLite file
-  on your machine to make future output sound like you (M4). It never leaves
-  the device, and there is a button to erase it.
+- **Nothing you rewrite is stored.** Not the selection, not the result, not a
+  history of either. The text exists in memory for the length of one request
+  and is gone. There is no local database to erase because there is nothing
+  kept to put in one.
 - **The local socket is not a network port.** The helper listens on a Unix
   domain socket with mode `0600` inside a `0700` directory, with a random
   handshake token generated at spawn. There is no TCP listener on any port,
@@ -66,7 +67,7 @@ thin native shell.
                 │  HTTP + SSE over a Unix domain socket
 ┌───────────────▼──────────────────┐
 │  starchd (Go)                    │   providers · streaming · prompts
-│                                  │   presets · voice profile · cache
+│                                  │   presets
 └──────────────────────────────────┘
 ```
 
@@ -165,12 +166,18 @@ service its own keyboard shortcut on that same screen.
 | **M1** | Text capture: Accessibility path plus clipboard fallback, both triggers | ✅ done |
 | **M2** | The loop: providers, streaming rewrite, overlay, replace in place | ✅ done |
 | **M3** | Presets, including a neutral-business-English one | ✅ done |
-| **M4** | Local voice profile — output that sounds like you, not like an LLM | |
-| **M5** | Notarised DMG and a Homebrew cask | |
+| **M4** | Notarised DMG and a Homebrew cask | |
 
 Not in v1: accounts, sync, analytics, auto-update, fine-tuning, or a custom
 keyboard. No Windows or Linux shell yet either, though the Go layer is written
 assuming they are coming.
+
+**Also not in v1: a local voice profile.** It was planned — accepted rewrites
+kept in a local database, the nearest few injected as examples so output drifts
+towards how you write. It was cut. Keeping a history of everything you rewrite
+is a real cost to the privacy guarantee above, and it is not one that pays for
+itself before the app is packaged and in people's hands. Presets already cover
+the common ground.
 
 ---
 

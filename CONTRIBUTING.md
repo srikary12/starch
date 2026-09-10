@@ -56,10 +56,9 @@ the bottom of [`api/README.md`](api/README.md) first.
 
 **Ask before adding any third-party dependency**, in either language. Today the
 Go module has zero and the Swift package has zero; both use only the standard
-library and system frameworks. The one dependency already agreed is
-`modernc.org/sqlite` for M4, chosen because it is pure Go and keeps
-`CGO_ENABLED=0` — which is what makes cross-compiling to Windows and Linux a
-one-line build.
+library and system frameworks, and there is no agreed exception. Anything
+proposed has to keep `CGO_ENABLED=0` for the daemon, which is what makes
+cross-compiling to Windows and Linux a one-line build.
 
 ## Quirks that will otherwise cost you an hour
 

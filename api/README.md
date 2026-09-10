@@ -5,9 +5,9 @@ This is the interface between a native shell and `starchd`. The macOS shell in
 this document as the source of truth — if the daemon and this file disagree,
 that is a bug in one of them.
 
-**Status legend.** Each endpoint is marked with the milestone that lands it.
-Endpoints marked *planned* are documented so shell authors can build against
-the shape, but the daemon returns `404 not_found` for them today.
+**Status legend.** Each endpoint is marked with the milestone that landed it.
+Every endpoint documented here is served; there are no planned-but-absent
+routes to build against.
 
 ---
 
@@ -19,7 +19,7 @@ loopback port is reachable by every process on the machine.
 
 | | |
 |---|---|
-| Socket path | `$SOCKET` (see [§6](#6-process-contract)), default `~/Library/Application Support/Starch/starchd.sock` on macOS |
+| Socket path | `$SOCKET` (see [§5](#5-process-contract)), default `~/Library/Application Support/Starch/starchd.sock` on macOS |
 | Socket mode | `0600`, inside a `0700` directory |
 | HTTP version | 1.1, keep-alive expected |
 | `Host` header | Ignored. Send anything; `starchd` is conventional. |
@@ -179,7 +179,7 @@ error the user cannot act on.
 `neutral`. An unknown or absent value falls back to `professional` rather than
 failing — the user is mid-sentence. `text` is capped at 1 MiB.
 
-Responds `200` with `Content-Type: text/event-stream`; see [§7](#7-sse-framing).
+Responds `200` with `Content-Type: text/event-stream`; see [§6](#6-sse-framing).
 
 **Errors split by whether output has started.** Anything knowable up front — no
 session, a rejected key, an unknown model, an unreachable endpoint — is a real
@@ -206,20 +206,6 @@ shell closes the connection; the daemon cancels the upstream provider call
 rather than letting the generation run on and bill the user. A shell that
 merely stops reading, without closing, has not cancelled anything.
 
-
----
-
-## 5. Planned endpoints
-
-Documented for shell authors. Not served yet.
-
-### `POST /v1/accept` — record an accepted rewrite *(M4)*
-
-```json
-{ "original": "...", "final": "...", "preset": "concise" }
-```
-
-Feeds the local voice profile. Never leaves the machine.
 
 ### `GET /v1/presets` — the active preset set *(M3)*
 
@@ -256,7 +242,7 @@ the file and the active set untouched.
 
 ---
 
-## 6. Process contract
+## 5. Process contract
 
 The shell owns the daemon's lifetime. The daemon is spawned at app launch, not
 on first use — cold-starting a process while the user waits spends latency the
@@ -296,7 +282,7 @@ is never removed.
 
 ---
 
-## 7. SSE framing
+## 6. SSE framing
 
 *(Lands with M2; specified here because it is the part shells most need to
 agree on.)*
@@ -328,7 +314,7 @@ otherwise.
 
 ---
 
-## 8. Versioning
+## 7. Versioning
 
 The version lives in the path (`/v1/...`). Within `v1`:
 
