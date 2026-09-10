@@ -88,26 +88,49 @@ to the ChatGPT tab and the product is dead.
 
 ---
 
-## Building
+## Install
 
-Requires macOS 13+, [Go](https://go.dev) 1.23+, and Xcode (for the Swift test
-frameworks — Command Line Tools alone can build the app but cannot run
-`make test`).
+Starch is installed by building it. Needs macOS 13+, [Go](https://go.dev) 1.23+
+and Xcode 16+.
 
 ```sh
 git clone https://github.com/srikary12/starch
 cd starch
-make            # build the daemon and the app bundle
-make run        # build and launch
+make install
+```
+
+That builds the daemon and the app, puts it in `/Applications`, and registers
+the right-click **Starch** entry — which macOS only discovers from there. The
+app is a menu bar utility with no Dock icon, so look in the status bar, not the
+Dock. Open **Settings…** from its menu and add your API key.
+
+### Why there is no DMG or Homebrew cask
+
+Both are possible; neither is better than this. macOS quarantines anything
+downloaded, and clearing that needs an Apple Developer ID certificate at
+$99/yr. Without one, a downloaded Starch fails its first launch with *"Starch
+is damaged and can't be opened"* until you run `xattr -dr com.apple.quarantine`
+by hand — and Homebrew removed the `--no-quarantine` escape hatch, so a cask
+does not avoid it either. A locally built app is never quarantined, so it just
+runs. A two-minute build beats a scary dialog.
+
+A Homebrew *formula* would sidestep the download but not the problem: formula
+`post_install` is sandboxed and cannot write to `/Applications`, which is where
+this app has to live for the Services entry to exist at all.
+
+### Other targets
+
+```sh
+make            # build without installing
+make run        # build and launch in place
 make test       # Go and Swift test suites
+make check      # vet, gofmt and both suites — what CI runs
 make help       # every target
 ```
 
-The app is a menu bar utility with no Dock icon — look in the status bar.
-
-`make install` copies it to `/Applications` and registers it. The right-click
-**Starch** entry needs this: macOS only discovers Services from apps installed
-there, and caches the list aggressively.
+Builds are stamped with `git describe`, so the menu bar names the exact commit
+you are running — `Helper connected · starchd 0.2.1 (v1)`, or
+`starchd 0.2.1-4-g9f3c2a1-dirty` for an uncommitted working tree.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development quirks worth knowing
 before you lose an hour to one of them.
@@ -166,7 +189,7 @@ service its own keyboard shortcut on that same screen.
 | **M1** | Text capture: Accessibility path plus clipboard fallback, both triggers | ✅ done |
 | **M2** | The loop: providers, streaming rewrite, overlay, replace in place | ✅ done |
 | **M3** | Presets, including a neutral-business-English one | ✅ done |
-| **M4** | Notarised DMG and a Homebrew cask | |
+| **M4** | CI on every push, and tagged source releases | ✅ done |
 
 Not in v1: accounts, sync, analytics, auto-update, fine-tuning, or a custom
 keyboard. No Windows or Linux shell yet either, though the Go layer is written

@@ -345,3 +345,43 @@ leave broken.
 
 ---
 
+## M4 — CI and releases
+
+### Already verified automatically
+
+| Check | Result |
+|---|---|
+| Daemon cross-compiles for darwin, linux and windows | ✅ all five targets |
+| Every Go test binary compiles for Linux | ✅ four packages |
+| Universal bundle carries both slices, both binaries | ✅ `x86_64 arm64` |
+| `Info.plist` version really substituted | ✅ `0.0.0-ci`, not `__VERSION__` |
+| Bundle identifier unchanged | ✅ `dev.starch.Starch` |
+| Signature seals and satisfies its designated requirement | ✅ |
+| Version stamped from `git describe` | ✅ `5c36faa-dirty` |
+
+That is the CI script itself, run locally against a real universal build — not
+an approximation of it.
+
+### Needs you
+
+| # | Check | Expected |
+|---|---|---|
+| 81 | Push the branch, watch Actions | Four CI jobs, all green |
+| 82 | Open a PR | The same four run against the merge commit |
+| 83 | Break `gofmt` deliberately, push | The **Go** job fails, and names the file |
+| 84 | Run **Release** via `workflow_dispatch` | Verify passes; **no** release is created |
+| 85 | `git tag -a v0.1.0 && git push origin v0.1.0` | Release appears with install instructions and a changelog |
+| 86 | Check the release's source archive | Extracts, and `make install` works from it |
+| 87 | After the tag, rebuild locally | Menu bar reads `starchd 0.1.0 (v1)`, not a sha |
+| 88 | Make a commit after the tag, rebuild | Reads `0.1.0-1-g<sha>` — a build that is past the tag says so |
+
+Test 84 is worth doing before 85: it is the whole reason `workflow_dispatch` is
+wired up, and a tag spent on a broken release cannot be un-spent cleanly.
+
+Test 86 matters more than it looks. Everyone installs from that archive, and it
+is the one artifact no local `make` ever exercises — a file missing from git,
+or a build step that quietly depends on `.git` being present, only shows up
+here.
+
+---
+

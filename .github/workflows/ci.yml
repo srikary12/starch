@@ -1,0 +1,116 @@
+name: CI
+
+# Everyone installs Starch by building it, so a build that only works on the
+# author's machine is a broken release. This runs the same targets a user runs.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go
+    # Pinned rather than macos-latest: Swift 6 needs Xcode 16+, and an image
+    # bump that quietly moves the default toolchain should break on a day we
+    # choose, not on a day GitHub chooses.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # vet also enforces gofmt, so a formatting drift fails here rather than
+      # in review.
+      - run: make vet
+
+      - name: Tests, with the race detector
+        run: go test -race ./...
+
+  swift:
+    name: Swift
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain in use
+        run: |
+          xcode-select -p
+          swift --version
+
+      - run: make test-swift
+
+  bundle:
+    name: App bundle
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build universal
+        run: make app ARCH=universal VERSION=0.0.0-ci
+
+      - name: The bundle has to be what it claims
+        run: |
+          set -euo pipefail
+          APP=apps/macos/build/Starch.app
+
+          # Both slices, both binaries. A universal build that quietly produced
+          # one architecture would only be discovered by an Intel user.
+          for bin in "$APP/Contents/MacOS/Starch" "$APP/Contents/Resources/starchd"; do
+            echo "== $bin"
+            lipo -info "$bin"
+            lipo -info "$bin" | grep -q 'arm64' || { echo "missing arm64"; exit 1; }
+            lipo -info "$bin" | grep -q 'x86_64' || { echo "missing x86_64"; exit 1; }
+          done
+
+          # The version is substituted by sed. If that ever silently fails we
+          # would ship a bundle whose version reads "__VERSION__", and nothing
+          # else in the build would notice.
+          plist="$APP/Contents/Info.plist"
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")
+          echo "CFBundleShortVersionString = $version"
+          [ "$version" = "0.0.0-ci" ] || { echo "version was not substituted"; exit 1; }
+
+          # Signed inside out, and the seal intact.
+          codesign --verify --strict --verbose=2 "$APP"
+
+  portability:
+    name: Daemon cross-compiles
+    # The Go layer is written assuming Windows and Linux shells are coming.
+    # That claim is worth nothing unless something checks it, and it costs one
+    # cheap Linux job to keep honest.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build the daemon for every target we claim
+        run: |
+          set -euo pipefail
+          for target in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do
+            os=${target%/*}
+            arch=${target#*/}
+            echo "== $target"
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -o /dev/null ./cmd/starchd
+          done
+
+      - name: Tests on Linux
+        # The daemon has no macOS-specific code. If that stops being true, this
+        # is where it shows up.
+        run: go test ./...

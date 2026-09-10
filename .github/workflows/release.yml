@@ -1,0 +1,124 @@
+name: Release
+
+# Starch is distributed as source: there is no signed binary, because
+# notarisation needs a paid Developer ID and an unsigned download is quarantined
+# on arrival — see README. So a release is a tag whose source is known to build
+# and pass, plus notes. The verify job is the whole point: nothing is published
+# until the exact tagged tree has been built and tested on a clean machine.
+
+on:
+  push:
+    tags: ["v*"]
+  # Dry run: builds and tests, publishes nothing.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: The tag must build and pass
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Resolve the version
+        id: version
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="0.0.0-dispatch"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building $version"
+
+      # Everything a contributor is asked to run before pushing: vet, gofmt,
+      # the Go suite and the Swift suite.
+      - run: make check
+
+      - name: Build universal
+        run: make app ARCH=universal VERSION='${{ steps.version.outputs.version }}'
+
+      - name: The bundle has to be what it claims
+        run: |
+          set -euo pipefail
+          APP=apps/macos/build/Starch.app
+
+          for bin in "$APP/Contents/MacOS/Starch" "$APP/Contents/Resources/starchd"; do
+            lipo -info "$bin"
+            lipo -info "$bin" | grep -q 'arm64'  || { echo "missing arm64";  exit 1; }
+            lipo -info "$bin" | grep -q 'x86_64' || { echo "missing x86_64"; exit 1; }
+          done
+
+          plist="$APP/Contents/Info.plist"
+          got=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")
+          want='${{ steps.version.outputs.version }}'
+          [ "$got" = "$want" ] || { echo "Info.plist says $got, tag says $want"; exit 1; }
+
+          # The bundle identifier is frozen: macOS keys Accessibility grants and
+          # Keychain ACLs to it, so a change here silently de-authorises every
+          # existing install. Worth failing a release over.
+          id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")
+          [ "$id" = "dev.starch.Starch" ] || { echo "bundle id changed: $id"; exit 1; }
+
+          codesign --verify --strict --verbose=2 "$APP"
+
+  publish:
+    name: Publish the release
+    needs: verify
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          # GitHub attaches the source tarball and zip to every release on its
+          # own, and that is the artifact people install from. Nothing to upload.
+          cat > /tmp/notes.md <<'EOF'
+          ## Install
+
+          Starch is built from source. It is not notarised — Apple charges $99/yr
+          for the certificate that would allow it — and an unsigned download is
+          quarantined by macOS on arrival, which is a worse first run than a
+          two-minute build. Building locally sidesteps that entirely.
+
+          ```sh
+          git clone https://github.com/srikary12/starch
+          cd starch
+          git checkout TAG_PLACEHOLDER
+          make install
+          ```
+
+          Needs macOS 13+, Go 1.23+ and Xcode 16+. `make install` puts the app in
+          `/Applications` and registers the right-click **Starch** entry, which
+          macOS only discovers from there.
+
+          Then open Settings from the menu bar and add your API key.
+
+          ---
+          EOF
+          sed -i "s|TAG_PLACEHOLDER|${TAG}|" /tmp/notes.md
+
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file /tmp/notes.md \
+            --generate-notes \
+            --verify-tag

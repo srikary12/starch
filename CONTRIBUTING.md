@@ -206,7 +206,51 @@ Capture and overlay behaviour genuinely cannot be automated. Those live in
 [MANUAL_TESTS.md](MANUAL_TESTS.md), which is expected to be run and updated,
 not treated as decoration.
 
-Run `make check` before opening a PR.
+Run `make check` before opening a PR. That is exactly what CI runs, so a green
+`make check` locally means a green CI.
+
+## CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push to
+`main` and every pull request:
+
+| Job | What it protects |
+|---|---|
+| **Go** | `make vet` (vet plus gofmt) and the suite under `-race` |
+| **Swift** | the Swift suite, on the toolchain it prints |
+| **App bundle** | a universal build, then checks both binaries carry both slices, the version really got substituted into `Info.plist`, the bundle identifier has not moved, and the signature seals |
+| **Daemon cross-compiles** | builds `starchd` for darwin, linux and windows, and runs the Go suite on Linux |
+
+The last one exists because the README claims the Go layer is ready for
+Windows and Linux shells. An unchecked claim like that rots in a week.
+
+The bundle job's checks are the interesting ones — each is a failure that
+otherwise ships silently. A universal build that quietly produced one
+architecture is only discovered by an Intel user. A failed `sed` ships a
+bundle whose version reads `__VERSION__`. And a changed bundle identifier
+de-authorises every existing install's Accessibility grant and Keychain ACL.
+
+## Releasing
+
+Tag it. [`.github/workflows/release.yml`](.github/workflows/release.yml) does
+the rest.
+
+```sh
+git tag -a v0.2.0 -m "v0.2.0"
+git push origin v0.2.0
+```
+
+The workflow builds and tests the tagged tree on a clean machine *before*
+publishing anything, then creates the GitHub release with install instructions
+and a generated changelog. GitHub attaches the source archives itself — there
+is nothing else to upload, because Starch is installed by building it.
+
+`workflow_dispatch` runs the same verification and publishes nothing, which is
+how to check a release will succeed without spending a tag on it.
+
+Tags are the version: `make` stamps builds with `git describe`, so `v0.2.0`
+becomes `0.2.0` and a later commit becomes `0.2.0-3-g1a2b3c4`. Nothing else
+needs editing to cut a release — there is no version constant to bump.
 
 ## Commits
 

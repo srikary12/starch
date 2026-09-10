@@ -13,7 +13,12 @@ BUILD_DIR := build
 DAEMON    := $(BUILD_DIR)/starchd
 APP       := $(MACOS_DIR)/build/$(APP_NAME).app
 
-VERSION   ?= 0.1.0-dev
+# Stamped from the tag, because everyone installs this by building it. Without
+# that, every report says "0.1.0-dev" and there is no way to ask which build
+# someone is on. --dirty marks uncommitted work so a local experiment is never
+# mistaken for a release. Falls back for a source tarball, which has no .git.
+GIT_VERSION := $(shell git describe --tags --dirty --always 2>/dev/null | sed 's/^v//')
+VERSION   ?= $(if $(GIT_VERSION),$(GIT_VERSION),0.1.0-dev)
 ARCH      ?= arm64
 SIGN_IDENTITY ?= -
 
