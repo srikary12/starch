@@ -39,8 +39,8 @@ func NewOpenAICompatible(client *http.Client, baseURL, apiKey, model string) *Op
 
 func (o *OpenAICompatible) Name() string {
 	// Named after the endpoint rather than the protocol, so an error message
-	// says "localhost:11434 rejected your API key" rather than something the
-	// user cannot map back to anything they configured.
+	// says "localhost:11434 does not recognise that model" rather than
+	// something the user cannot map back to anything they configured.
 	if host := hostOf(o.baseURL); host != "" {
 		return host
 	}

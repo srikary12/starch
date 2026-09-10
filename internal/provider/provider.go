@@ -132,9 +132,14 @@ func classify(status int, providerName, detail string) *Error {
 	switch {
 	case status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return &Error{
-			Kind:    KindAuth,
-			Status:  status,
-			Message: fmt.Sprintf("%s rejected your API key. Check it in Settings.", providerName),
+			Kind:   KindAuth,
+			Status: status,
+			// Deliberately not named after the provider. The name here is ours,
+			// not theirs — "OpenAI-compatible" is not a service that rejected
+			// anything, and a bare host like "localhost:11434" reads as a
+			// network problem. There is only ever one key in play, so saying
+			// which one adds nothing to what the user has to go and do.
+			Message: "Your API key was rejected. Check it in Settings.",
 		}
 	case status == http.StatusNotFound:
 		return &Error{

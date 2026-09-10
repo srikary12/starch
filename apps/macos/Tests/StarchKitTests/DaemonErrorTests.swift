@@ -32,13 +32,13 @@ struct DaemonErrorTests {
         }
     }
 
-    @Test("a 401 from the provider carries the provider's own wording through")
+    @Test("a 401 from the provider carries the daemon's own wording through")
     func rejectedAPIKey() {
         let error = DaemonClient.error(
             from: head(401),
             body: envelope(
                 code: "provider_auth",
-                message: "Google AI Studio rejected your API key. Check it in Settings."
+                message: "Your API key was rejected. Check it in Settings."
             )
         )
         guard case let .api(status, code, message) = error else {
@@ -48,8 +48,8 @@ struct DaemonErrorTests {
         #expect(status == 401)
         #expect(code == "provider_auth")
         // The daemon phrases these for a person, and that phrasing is the
-        // whole value: it names the provider and says where to fix it.
-        #expect(message.contains("rejected your API key"))
+        // whole value: it says what is wrong and where to go and fix it.
+        #expect(message == "Your API key was rejected. Check it in Settings.")
     }
 
     @Test("a 401 with no envelope is still treated as the handshake")
