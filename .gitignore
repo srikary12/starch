@@ -15,3 +15,4 @@ apps/macos/*.xcodeproj
 # Local, machine-specific overrides
 /.env
 /.envrc
+.vscode/launch.json
