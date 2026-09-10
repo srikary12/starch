@@ -405,6 +405,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A second trigger replaces the first rather than racing it.
         rewriteTask?.cancel()
 
+        // Nothing can work without a key, and sending the rewrite anyway means
+        // waiting on a round trip to be told what we already knew. Worse, it
+        // comes back as a 401, which reads like the helper is broken rather
+        // than like setup being unfinished. Say it plainly and open the one
+        // window where it can be fixed — Settings starts in the key field when
+        // there is no key, so this lands the user on the cursor.
+        if preferences.provider.requiresAPIKey, apiKey(for: preferences.provider).isEmpty {
+            overlay.hide()
+            menuBar.flashTrigger("No API key set for \(preferences.provider.displayName).")
+            showSettings()
+            return
+        }
+
         let preset = Presets.named(preferences.presetID, in: presets)
         overlay.begin(presetName: preset.name, near: capture)
 

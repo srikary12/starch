@@ -661,11 +661,23 @@ public struct DaemonClient: Sendable {
         }
     }
 
-    private static func error(from head: HTTPResponseHead, body: Data) -> DaemonError {
-        if head.statusCode == 401 { return .unauthorized }
+    /// Internal rather than private so the two-meanings-of-401 rule is
+    /// testable. Getting it wrong is invisible until someone's key expires.
+    static func error(from head: HTTPResponseHead, body: Data) -> DaemonError {
+        // 401 covers two unrelated failures: the handshake token being wrong,
+        // which is ours to fix by restarting the daemon, and the user's API key
+        // being rejected upstream, which restarting cannot touch. The code says
+        // which, so the code decides — reading the status alone turned every
+        // rejected API key into "the helper rejected the handshake".
         if let envelope = try? JSONDecoder().decode(DaemonErrorBody.self, from: body) {
+            if head.statusCode == 401, envelope.error.code == "unauthorized" {
+                return .unauthorized
+            }
             return .api(status: head.statusCode, code: envelope.error.code, message: envelope.error.message)
         }
+        // No envelope to read: a bare 401 is the handshake, since every other
+        // 401 the daemon produces carries one.
+        if head.statusCode == 401 { return .unauthorized }
         return .unexpectedStatus(head.statusCode, body: String(decoding: body, as: UTF8.self))
     }
 }
