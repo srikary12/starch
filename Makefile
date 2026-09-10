@@ -41,6 +41,11 @@ build: app
 ## daemon: build starchd
 daemon:
 	@mkdir -p $(BUILD_DIR)
+	@# Removed rather than overwritten: a previous ARCH=universal leaves a fat
+	@# binary here, and `go build -o` refuses to overwrite a file it did not
+	@# produce — so switching architectures failed with "already exists and is
+	@# not an object file" until you knew to run `make clean`.
+	@rm -f $(DAEMON)
 ifeq ($(ARCH),universal)
 	@# CGO_ENABLED=0 keeps cross-compilation to Windows and Linux a one-liner,
 	@# and constrains any future dependency to pure Go for the same reason.

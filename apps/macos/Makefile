@@ -19,12 +19,21 @@ DAEMON     ?=
 SIGN_IDENTITY ?= -
 
 # arm64, x86_64, or universal.
+#
+# A universal build compiles each slice on its own and lipos them together,
+# rather than passing `--arch arm64 --arch x86_64` in one invocation. That
+# combination fails outright on Xcode 16.4 — "Unexpected duplicate tasks",
+# "SWIFT_VERSION '' is unsupported" — and succeeds on Xcode 26, so a build that
+# works here would break for anyone a version behind. Per-slice works on both,
+# and it is already how the root Makefile builds the Go daemon, so there is one
+# universal-binary story rather than two.
 ARCH ?= arm64
 ifeq ($(ARCH),universal)
-SWIFT_ARCH_FLAGS := --arch arm64 --arch x86_64
+SLICES := arm64 x86_64
 else
-SWIFT_ARCH_FLAGS := --arch $(ARCH)
+SLICES := $(ARCH)
 endif
+FIRST_SLICE := $(firstword $(SLICES))
 
 BUILD_DIR := build
 APP       := $(BUILD_DIR)/$(APP_NAME).app
@@ -46,7 +55,10 @@ all: app
 
 ## build: compile the Swift executable only
 build:
-	swift build -c $(CONFIG) $(SWIFT_ARCH_FLAGS)
+	@for slice in $(SLICES); do \
+		echo "swift build -c $(CONFIG) --arch $$slice"; \
+		swift build -c $(CONFIG) --arch $$slice || exit 1; \
+	done
 
 ## test: run the Swift unit tests
 test:
@@ -58,7 +70,7 @@ test:
 	swift test
 
 print-bin-path:
-	@swift build -c $(CONFIG) $(SWIFT_ARCH_FLAGS) --show-bin-path
+	@swift build -c $(CONFIG) --arch $(FIRST_SLICE) --show-bin-path
 
 ## app: assemble, populate and sign $(APP)
 app: build
@@ -73,7 +85,13 @@ app: build
 	@rm -rf "$(APP)"
 	@mkdir -p "$(CONTENTS)/MacOS" "$(CONTENTS)/Resources"
 
-	@cp "$$(swift build -c $(CONFIG) $(SWIFT_ARCH_FLAGS) --show-bin-path)/$(APP_NAME)" "$(CONTENTS)/MacOS/$(APP_NAME)"
+	@# lipo even for one slice: it copies in that case, so there is a single
+	@# code path rather than a branch that only the universal build exercises.
+	@slices=""; \
+	for slice in $(SLICES); do \
+		slices="$$slices $$(swift build -c $(CONFIG) --arch $$slice --show-bin-path)/$(APP_NAME)"; \
+	done; \
+	lipo -create -output "$(CONTENTS)/MacOS/$(APP_NAME)" $$slices
 	@cp "$(DAEMON)" "$(CONTENTS)/Resources/starchd"
 	@chmod +x "$(CONTENTS)/Resources/starchd"
 

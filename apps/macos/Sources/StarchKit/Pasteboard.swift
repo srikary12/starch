@@ -128,7 +128,14 @@ public final class ClipboardCapture {
     /// Exposed because the replace path (M2) needs the same guarantee across a
     /// different operation: write the rewrite, paste it, then put the user's
     /// clipboard back.
-    public func withSavedClipboard<T>(_ body: (PasteboardSnapshot) async throws -> T) async rethrows -> T {
+    ///
+    /// `T` is constrained to `Sendable` because the body is async: without it
+    /// the result crosses an isolation boundary unchecked. Swift 6.3 infers
+    /// this and lets the unconstrained version through; 6.1 does not, which is
+    /// the compiler being right. Both call sites return `String` or `Void`.
+    public func withSavedClipboard<T: Sendable>(
+        _ body: (PasteboardSnapshot) async throws -> T
+    ) async rethrows -> T {
         let snapshot = PasteboardSnapshot(capturing: pasteboard)
         defer {
             snapshot.restore(to: pasteboard)
