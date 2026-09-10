@@ -131,9 +131,18 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     func show() {
         refreshKeyStatus()
         refreshPresetStatus()
-        NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+        // orderFrontRegardless as well, because this window is sometimes
+        // opened out of another window's close. An app whose last window has
+        // just gone is not active for a moment, and makeKeyAndOrderFront on an
+        // inactive app orders behind the active one — which put Settings
+        // silently behind whatever the user was working in.
+        window?.orderFrontRegardless()
+        // Activated last, not first. An accessory app has no window to make
+        // key until one has been ordered in, so activating ahead of that does
+        // nothing and the window arrives in a background app.
+        NSApp.activate(ignoringOtherApps: true)
 
         // Arriving with no key means this window was opened to collect one —
         // most often straight off the first-run guide. Start in that field
@@ -448,9 +457,13 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     func show() {
         refreshStatus()
         watcher.start { [weak self] _ in self?.refreshStatus() }
-        NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+        // The first-run case: an LSUIElement app is not activated by being
+        // launched — it has no Dock icon to have been clicked — so the guide
+        // would open behind whatever the user is in and go unread.
+        window?.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func buildUI() {

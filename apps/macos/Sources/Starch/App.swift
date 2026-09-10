@@ -184,14 +184,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: SettingsWindowController?
     private var onboardingWindow: OnboardingWindowController?
 
-    /// Set while the first-run guide is on screen.
-    ///
-    /// Closing it then leads straight into Settings, because the guide
-    /// explains what Starch needs and Settings is where it gets it — without a
-    /// key the app cannot do anything at all. Reopening the guide later from
-    /// the menu is a different intent and must not drag Settings along.
-    private var showingFirstRunGuide = false
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         // A mismatch here silently breaks Accessibility grants and Keychain
         // ACLs, both of which are keyed off the bundle identifier.
@@ -217,7 +209,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         accessibilityWatcher.start { [weak self] _ in self?.refreshMenu() }
 
         if !preferences.hasCompletedOnboarding {
-            showingFirstRunGuide = true
             showOnboarding()
         }
     }
@@ -411,7 +402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // than like setup being unfinished. Say it plainly and open the one
         // window where it can be fixed — Settings starts in the key field when
         // there is no key, so this lands the user on the cursor.
-        if preferences.provider.requiresAPIKey, apiKey(for: preferences.provider).isEmpty {
+        if needsAPIKey {
             overlay.hide()
             menuBar.flashTrigger("No API key set for \(preferences.provider.displayName).")
             showSettings()
@@ -601,6 +592,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow?.refreshPresetStatus()
     }
 
+    /// Whether setup is unfinished: this provider needs a key and none is
+    /// stored.
+    ///
+    /// The one question worth asking before a rewrite and after the guide.
+    /// False for an OpenAI-compatible endpoint, where a local server — Ollama,
+    /// LM Studio — is a complete configuration with no key at all.
+    private var needsAPIKey: Bool {
+        preferences.provider.requiresAPIKey && apiKey(for: preferences.provider).isEmpty
+    }
+
     /// The key for a provider, read from the Keychain at most once per launch.
     ///
     /// keychainAccount, not rawValue: Settings writes under the former, and
@@ -721,11 +722,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 self.refreshMenu()
 
-                guard self.showingFirstRunGuide else { return }
-                self.showingFirstRunGuide = false
-                // Deferred by a turn: this runs from windowWillClose, and
-                // opening a window while another is mid-close leaves the new
-                // one ordered behind it.
+                // Gated on setup being unfinished rather than on this being
+                // the first launch. A first-launch flag made the handoff fire
+                // exactly once per machine, which meant it could not be
+                // retried, and could not be checked without deleting the
+                // preferences file. Asking whether there is a key answers the
+                // question that actually matters — the guide ends where the
+                // user has to go next — and stops once there is nothing left
+                // to set up, so re-reading the guide later is not hijacked.
+                guard self.needsAPIKey else { return }
+
+                // Deferred a turn: this runs from windowWillClose, and a window
+                // presented while another is mid-teardown does not reliably
+                // appear at all. Coming forward once it does is handled in
+                // show(), by ordering front regardless of activation.
                 Task { @MainActor [weak self] in
                     self?.showSettings()
                 }
