@@ -11,11 +11,6 @@ and it is only worth using if it is faster than that loop.
 Bring your own API key. There is no account, no hosted backend, and no
 telemetry.
 
-> **Status: pre-release (M3).** The loop works end to end: select text, press
-> the shortcut, watch the rewrite stream into an overlay, press Return to
-> replace it in place. Five presets, editable as JSON, cycled with Tab. Bring
-> your own key. Packaging is the remaining work — see [Roadmap](#roadmap).
-
 ---
 
 ## Privacy
