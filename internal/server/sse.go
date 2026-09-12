@@ -9,7 +9,7 @@ import (
 
 // sseStream writes the daemon's side of an event stream.
 //
-// The framing is the one documented in api/README.md §7: one JSON object per
+// The framing is the one documented in api/README.md §6: one JSON object per
 // `data:` line, blank line between events. Deliberately minimal — the shells
 // that consume this are written in other languages, and every feature of the
 // SSE spec used here is one more thing each of them has to implement.

@@ -12,7 +12,7 @@ import Network
 
 /// Incremental decoder for the daemon's event stream.
 ///
-/// The framing is documented in api/README.md §7. It is deliberately a small
+/// The framing is documented in api/README.md §6. It is deliberately a small
 /// subset of SSE, because every shell that binds to this contract has to
 /// implement it: one JSON object per `data:` line, blank line between events.
 ///
