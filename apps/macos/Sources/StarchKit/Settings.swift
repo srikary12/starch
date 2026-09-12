@@ -129,13 +129,20 @@ public enum ProviderID: String, CaseIterable, Sendable, Codable {
         }
     }
 
+    /// The model to start from, used only until the daemon's catalog arrives.
+    ///
+    /// `internal/catalog` is the authority, and Settings prefers it the moment
+    /// it answers. This exists for the seconds before that — a first launch, a
+    /// helper that has not come up — so it should name a model that is
+    /// actually current, not merely a string that is never empty.
     public var defaultModel: String {
         switch self {
         case .anthropic: "claude-sonnet-5"
         // Flash rather than Pro: this is an inline rewriter on a 500ms
         // first-token budget, and the task is not reasoning-heavy.
         case .gemini: "gemini-flash-latest"
-        case .openAICompatible: "gpt-4o-mini"
+        // Cheapest of the current family, for the same reason.
+        case .openAICompatible: "gpt-5.6-luna"
         }
     }
 
