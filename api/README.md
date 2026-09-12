@@ -124,6 +124,71 @@ daemon's idle-exit timer.
 
 ---
 
+### `GET /v1/models` — the provider and model catalog *(M5)*
+
+What a settings window reads to populate its provider, endpoint, model and
+thinking-effort pickers. **No session and no API key**: that window is most
+often open precisely because there is no key yet.
+
+```json
+{
+  "source": "builtin",
+  "providers": [
+    {
+      "id": "gemini",
+      "name": "Google AI Studio",
+      "requires_key": true,
+      "endpoints": [
+        {
+          "url": "https://generativelanguage.googleapis.com/v1beta",
+          "name": "Google AI Studio",
+          "default_model": "gemini-flash-latest",
+          "models": [
+            {
+              "id": "gemini-3.8-flash",
+              "name": "Gemini 3.8 Flash",
+              "thinking": {"levels": ["low", "medium", "high"], "default": "low"}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+`id` on a provider is exactly what goes back in a session request's `provider`
+field, and an endpoint's `url` is its `base_url`. A shell can configure a
+session entirely from this document without inventing anything.
+
+**This is a curated table, not a live query.** The daemon does not call any
+provider to build it, so it populates before a key is set, with no endpoint
+reachable, and offline. The cost is that it has to be updated when a provider
+ships a model — so **a shell's model field must stay typeable**. The list is a
+convenience, never a whitelist, and a model released after someone's build has
+to remain reachable by typing its name. `source` is `builtin` today; it exists
+so a future live-listing mode is an added value rather than a contract change.
+
+**Models hang off the endpoint, not the provider**, because that is where they
+live: `openai_compatible` pointed at `api.openai.com` serves GPT models, and
+pointed at `localhost:11434` serves whatever that machine has pulled into
+Ollama. `models` may be empty — for a local server or a gateway like OpenRouter
+that is the truthful answer rather than a gap — in which case `note` says so
+and the shell lets the user type.
+
+| Field | Notes |
+|---|---|
+| `thinking` | **Absent** when the model has no reasoning controls. Render no effort control at all, not a disabled one. |
+| `thinking.levels` | Exactly what this model accepts, cheapest first. The values are the providers' own vocabulary — `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` — passed through unmapped. |
+| `thinking.default` | What to preselect. `low` nearly everywhere: this is an inline rewriter on a 500ms first-token budget, and most current models think at medium or high unless told otherwise. |
+| `default_model` | Preselect when the endpoint is chosen. Absent where the models cannot be known ahead of time. |
+| `note` | Short qualifier for a picker: why a list is empty, or that an id is a rolling alias. |
+
+Which models take an effort setting, and which levels each accepts, is the
+reason this is curated rather than proxied: no provider's own `/models`
+endpoint reports it uniformly. Google's says a model thinks but not at which
+levels, and OpenAI's says nothing at all.
+
 ### `POST /v1/session` — hand over provider credentials *(M2)*
 
 The shell reads the API key from the OS secret store and posts it here. The

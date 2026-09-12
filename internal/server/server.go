@@ -120,6 +120,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/healthz", only(http.MethodGet, s.handleHealthz))
 	mux.HandleFunc("/"+APIVersion+"/session", only(http.MethodPost, s.handleSession))
 	mux.HandleFunc("/"+APIVersion+"/rewrite", only(http.MethodPost, s.handleRewrite))
+	mux.HandleFunc("/"+APIVersion+"/models", only(http.MethodGet, s.handleModels))
 	mux.HandleFunc("/"+APIVersion+"/presets", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
