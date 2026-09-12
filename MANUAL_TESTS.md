@@ -385,3 +385,44 @@ here.
 
 ---
 
+## M5 — model pickers and thinking effort
+
+### Already verified automatically
+
+| Check | Result |
+|---|---|
+| `GET /v1/models` answers with no session and no API key | ✅ |
+| Every catalog provider id is one `POST /v1/session` accepts | ✅ |
+| No default model names a model absent from its own list | ✅ |
+| No default effort is one its model would reject | ✅ |
+| Each provider sends effort in its own field | ✅ `output_config.effort`, `thinkingLevel`, `reasoning_effort` |
+| No effort chosen means no new field in the request | ✅ Gemini excepted, which keeps asking for its floor |
+| A level chosen in Settings reaches the upstream request | ✅ end to end, over a real socket |
+| Settings written before this existed still load | ✅ provider, model and endpoint all survive |
+
+### Needs you
+
+| # | Check | Expected |
+|---|---|---|
+| 89 | Open Settings with the helper running | Endpoint and Model are dropdowns, both populated |
+| 90 | Open the Endpoint list, pick Ollama | Model list changes; the note explains it is empty |
+| 91 | Type a model name that is not in the list, click away | Kept exactly as typed, and used on the next rewrite |
+| 92 | Select a thinking model (`claude-sonnet-5`, `gemini-3.8-flash`) | **Thinking** row appears, preselected **Low** |
+| 93 | Select `claude-haiku-4-5` | **Thinking** row disappears entirely |
+| 94 | Set Thinking to High, rewrite | Noticeably slower than Low, and visibly more considered |
+| 95 | With verbose logging on, change the level and rewrite | `session configured … thinking_effort=high` in Console |
+| 96 | Set Thinking to *Endpoint default*, rewrite | Works; the log shows an empty `thinking_effort` |
+| 97 | Switch provider | Endpoint and model become the new provider's defaults; Thinking resets |
+| 98 | Quit the helper, then open Settings | Lists empty, every field still editable, nothing looks broken |
+| 99 | Upgrade over an existing install | Your provider, model and endpoint are exactly as you left them |
+
+Test 91 is the one that matters most. The catalog is curated, so it is always a
+little behind — the day a provider ships a model, typing its name has to be
+enough, or this feature has made the app *less* capable than the text box it
+replaced.
+
+Test 94 is the reason the control exists at all. If High and Low feel the same,
+the level is not reaching the provider, and 95 says whether it left the app.
+
+---
+

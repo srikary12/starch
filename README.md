@@ -140,6 +140,16 @@ Settings live in the menu bar → **Settings…**
   That last one covers OpenAI, OpenRouter, Groq, Together, Ollama and LM Studio
   with a single implementation. Local models matter here: they are the answer
   for anyone who will not send work messages to a third party.
+- **Endpoint and model** — dropdowns, filled from a list the helper serves. The
+  models on offer follow the endpoint, because that is where they live:
+  `api.openai.com` serves GPT models, `localhost:11434` serves whatever you
+  have pulled into Ollama. Both fields still take a typed value. The list is
+  curated and therefore always a little behind, so a model released after your
+  build is never out of reach — type its name and it is used exactly as typed.
+- **Thinking** — shown only for models that have a reasoning setting, carrying
+  the levels that model accepts, and defaulting to **Low**. Current models
+  think at medium or high unless told otherwise, which on a one-sentence
+  rewrite is most of the wait and little of the benefit.
 - **API key** — stored in the Keychain. Local endpoints generally do not need
   one.
 - **Shortcut** — default `⌃⌥⌘P`, rebindable.
@@ -185,6 +195,7 @@ service its own keyboard shortcut on that same screen.
 | **M2** | The loop: providers, streaming rewrite, overlay, replace in place | ✅ done |
 | **M3** | Presets, including a neutral-business-English one | ✅ done |
 | **M4** | CI on every push, and tagged source releases | ✅ done |
+| **M5** | Model and endpoint pickers, and a thinking-effort control | ✅ done |
 
 Not in v1: accounts, sync, analytics, auto-update, fine-tuning, or a custom
 keyboard. No Windows or Linux shell yet either, though the Go layer is written

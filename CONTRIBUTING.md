@@ -35,6 +35,7 @@ make help       # everything else
 cmd/starchd/            daemon entrypoint
 internal/
   brand/                the product name, in one place
+  catalog/              the curated provider, endpoint and model table
   config/               environment-driven configuration
   server/               UDS listener, routes, SSE encoder
 api/                    the wire contract — other shells depend on it
@@ -51,6 +52,20 @@ per-platform paths; build tags are a last resort.
 
 Changing anything in `api/` is a contract change. Read the versioning rules at
 the bottom of [`api/README.md`](api/README.md) first.
+
+### Keeping the model catalog current
+
+`internal/catalog` is a hand-maintained table, served to every shell at
+`GET /v1/models`. When a provider ships a model, that file is the only place to
+add it — and the only place that records which thinking levels each model
+accepts, because no provider's own `/models` endpoint reports that uniformly.
+
+Its tests check the table against itself: a default that names a model absent
+from its own list, a default effort the model would reject, a duplicated id.
+They cannot check that the names are current — nothing can do that but a
+person with the provider's documentation open. Which is also why every shell
+must keep its model field typeable: a stale table must never be able to lock
+someone out of a model their endpoint serves.
 
 ## Dependency policy
 
