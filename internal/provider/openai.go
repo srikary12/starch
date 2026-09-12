@@ -80,6 +80,14 @@ func (o *OpenAICompatible) Stream(ctx context.Context, req Request) (<-chan Delt
 		// reject unknown fields are handled by usage simply staying zero.
 		"stream_options": map[string]any{"include_usage": true},
 	}
+	// Only when the user picked a level. Endpoints vary on this field more
+	// than any other — OpenAI takes none through max, Ollama maps it onto its
+	// own Think flag and takes three of them, and a gateway in front of a
+	// non-reasoning model may reject it outright — so sending it unasked would
+	// break plain chat models that work fine today.
+	if req.Effort != "" {
+		body["reasoning_effort"] = req.Effort
+	}
 
 	encoded, err := json.Marshal(body)
 	if err != nil {

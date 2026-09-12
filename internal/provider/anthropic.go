@@ -63,6 +63,14 @@ func (a *Anthropic) Stream(ctx context.Context, req Request) (<-chan Delta, erro
 	if req.System != "" {
 		body["system"] = req.System
 	}
+	// output_config.effort, not a thinking budget: current models reject
+	// thinking.budget_tokens outright, and effort is the parameter that
+	// replaced it. Sent only when the user picked a level — an endpoint that
+	// predates the field would reject it, and nobody who never touched the
+	// control should pay for that.
+	if req.Effort != "" {
+		body["output_config"] = map[string]any{"effort": req.Effort}
+	}
 
 	encoded, err := json.Marshal(body)
 	if err != nil {

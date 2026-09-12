@@ -201,7 +201,8 @@ uses its own native one and the contract stays identical.
   "provider": "anthropic",
   "model": "claude-sonnet-5",
   "base_url": "https://api.anthropic.com",
-  "api_key": "sk-..."
+  "api_key": "sk-...",
+  "thinking_effort": "low"
 }
 ```
 
@@ -212,6 +213,21 @@ uses its own native one and the contract stays identical.
 | `openai_compatible` | **required** | Must include the endpoint's own version prefix: `https://api.openai.com/v1`, `http://localhost:11434/v1` for Ollama, `http://localhost:1234/v1` for LM Studio. |
 
 `api_key` may be empty for local endpoints.
+
+`thinking_effort` is optional. It is passed through verbatim into whichever
+field the provider uses for it — `output_config.effort` on Anthropic,
+`generationConfig.thinkingLevel` on Gemini, `reasoning_effort` on an
+OpenAI-compatible endpoint. Take the value from a model's `thinking.levels` in
+[`GET /v1/models`](#get-v1models--the-provider-and-model-catalog-m5). The daemon
+checks only that it is a short lowercase word: the catalog is the authority on
+which levels a model accepts, that differs per model, and a daemon that refused
+an unrecognised level would have to be rebuilt every time a provider shipped
+one. A level the endpoint does not take comes back as that endpoint's own
+rejection message, which is written to be shown to the user.
+
+Omitting it leaves the endpoint's own default in place — **except on Gemini**,
+where the daemon still asks for `low`. Those models think by default, rewriting
+a sentence is not a reasoning task, and that default is most of the wait.
 
 Google also publishes an OpenAI-compatible endpoint at
 `https://generativelanguage.googleapis.com/v1beta/openai/`, which works through

@@ -77,6 +77,7 @@ func (s *Server) handleRewrite(w http.ResponseWriter, r *http.Request) {
 		System: system,
 		User:   user,
 		Model:  sess.model,
+		Effort: sess.effort,
 	})
 	if err != nil {
 		// The stream never started, so a normal error response is still

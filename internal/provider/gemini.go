@@ -85,7 +85,9 @@ func NormalizeGeminiBaseURL(raw string) string {
 
 func (g *Gemini) Name() string { return "Google AI Studio" }
 
-// geminiMinimumThinking is the lowest reasoning level current models accept.
+// geminiMinimumThinking is what to ask for when the session names no level.
+// "low" rather than "minimal": gemini-2.5-flash rejects minimal, and low is
+// the floor every current model accepts.
 const geminiMinimumThinking = "low"
 
 func (g *Gemini) Stream(ctx context.Context, req Request) (<-chan Delta, error) {
@@ -132,10 +134,14 @@ func (g *Gemini) stream(ctx context.Context, req Request, withThinkingLevel bool
 	if withThinkingLevel {
 		// Rewriting a sentence is not a reasoning task, and current Gemini
 		// models think by default — which is the difference between a rewrite
-		// arriving in half a second and in two. "low" rather than "minimal":
-		// gemini-2.5-flash rejects minimal, and low is the floor every current
-		// model accepts.
-		generation["thinkingLevel"] = geminiMinimumThinking
+		// arriving in half a second and in two. So unlike the other providers
+		// this one always asks for a level: a session that names none still
+		// gets the floor rather than the model's own default.
+		level := req.Effort
+		if level == "" {
+			level = geminiMinimumThinking
+		}
+		generation["thinkingLevel"] = level
 	}
 
 	body := map[string]any{

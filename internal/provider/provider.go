@@ -44,6 +44,16 @@ type Request struct {
 	Model string
 	// MaxTokens bounds the reply. Zero means DefaultMaxTokens.
 	MaxTokens int
+	// Effort is the thinking level, in the provider's own vocabulary —
+	// "minimal", "low", "high" and so on. Empty means "do not ask for one",
+	// which leaves the endpoint's default in place.
+	//
+	// Deliberately a string passed through verbatim rather than an enum
+	// translated per provider: the levels each model accepts are curated in
+	// internal/catalog and reach here having already been offered to the user,
+	// so a mapping table in this package would be a second place for the same
+	// facts to rot. Each provider below puts it in its own field.
+	Effort string
 }
 
 // DefaultMaxTokens is deliberately modest: this rewrites a selection, and a
