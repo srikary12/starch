@@ -3,10 +3,15 @@ name: CI
 # Everyone installs Starch by building it, so a build that only works on the
 # author's machine is a broken release. This runs the same targets a user runs.
 
+# Pull requests only. main is protected, so every change arrives as a PR and is
+# tested there — a post-merge run re-tests a tree that has already passed, and
+# through the concurrency group below it also cancels anything still running.
+#
+# workflow_dispatch stays deliberately: a direct push made under an admin bypass
+# is the one path this leaves untested, and this is how to check it by hand.
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

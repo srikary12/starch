@@ -1,0 +1,86 @@
+name: CodeQL
+
+# Advanced setup, replacing GitHub's default setup, for exactly one reason:
+# default setup picks its own trigger events and offers no way to change them —
+# languages, query suite, runner and threat model are configurable, the triggers
+# are not. It scans every push to main as well as every pull request. Only a
+# workflow file can say "pull requests, plus a weekly baseline".
+#
+# The weekly run is not ceremony. Code scanning alerts on the Security tab come
+# from analyses of the default branch; a pull-request-only configuration
+# annotates diffs and leaves that list permanently empty. This keeps the
+# baseline without putting a run on every commit.
+#
+# Note that the repository ruleset requires code scanning results on a pull
+# request: if CodeQL is ever removed, that rule has to go with it, or every pull
+# request blocks forever on "a required tool is not configured".
+
+on:
+  pull_request:
+  schedule:
+    # Monday, 03:00 UTC. Nothing depends on the hour; it is simply off-peak.
+    - cron: "0 3 * * 1"
+  # So a scan can be run by hand against main without waiting a week.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze ${{ matrix.language }}
+    runs-on: ${{ matrix.runner }}
+
+    permissions:
+      # Uploading results writes to the security events API. Nothing else here
+      # needs more than read, so nothing else gets more.
+      security-events: write
+      contents: read
+      actions: read
+
+    strategy:
+      # One language failing must not hide the results for the other two.
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            runner: ubuntu-latest
+            build-mode: autobuild
+          # The workflows themselves. Cheap, and this is the one language here
+          # whose bugs would be in the CI that guards everything else.
+          - language: actions
+            runner: ubuntu-latest
+            build-mode: none
+          # "Support for the analysis of Swift requires macOS." This one cannot
+          # be moved to a Linux runner however much quicker they queue.
+          - language: swift
+            runner: macos-15
+            build-mode: manual
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      # Swift is compiled and has no "none" build mode, so something has to
+      # build it. Not autobuild: the package is not at the repository root, and
+      # autobuild looks for something to build from the top. A plain host-arch
+      # build is enough — the analysis wants compiled source, not a shippable
+      # bundle, so there is no need for the Makefile's per-slice universal
+      # build here.
+      - name: Build the Swift package
+        if: matrix.language == 'swift'
+        run: swift build --package-path apps/macos
+
+      - name: Analyse
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
