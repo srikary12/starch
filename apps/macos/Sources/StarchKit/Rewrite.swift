@@ -134,18 +134,29 @@ public struct SessionRequest: Sendable, Encodable {
     public let model: String
     public let baseURL: String
     public let apiKey: String
+    /// Thinking level, in the provider's own vocabulary. Empty leaves the
+    /// endpoint's default alone.
+    public let thinkingEffort: String
 
-    public init(provider: String, model: String, baseURL: String, apiKey: String) {
+    public init(
+        provider: String,
+        model: String,
+        baseURL: String,
+        apiKey: String,
+        thinkingEffort: String = ""
+    ) {
         self.provider = provider
         self.model = model
         self.baseURL = baseURL
         self.apiKey = apiKey
+        self.thinkingEffort = thinkingEffort
     }
 
     enum CodingKeys: String, CodingKey {
         case provider, model
         case baseURL = "base_url"
         case apiKey = "api_key"
+        case thinkingEffort = "thinking_effort"
     }
 }
 

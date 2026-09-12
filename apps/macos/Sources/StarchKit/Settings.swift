@@ -324,6 +324,15 @@ public struct Preferences: Sendable, Equatable, Codable {
     public var provider: ProviderID
     public var model: String
     public var baseURL: String
+    /// The thinking level to ask the model for, in the provider's own
+    /// vocabulary. Empty means "do not ask", which leaves the endpoint's own
+    /// default in place.
+    ///
+    /// Stored as a plain string rather than an enum because the levels a model
+    /// accepts come from the daemon's catalog and differ per model. An enum
+    /// here would be a second, stale copy of that list, and would silently drop
+    /// a level the catalog was offering.
+    public var thinkingEffort: String
     public var hotKey: HotKeySpec
     public var presetID: String
     public var hasCompletedOnboarding: Bool
@@ -333,6 +342,7 @@ public struct Preferences: Sendable, Equatable, Codable {
         provider: ProviderID = .anthropic,
         model: String? = nil,
         baseURL: String? = nil,
+        thinkingEffort: String = "",
         hotKey: HotKeySpec = .default,
         presetID: String = Presets.defaultID,
         hasCompletedOnboarding: Bool = false,
@@ -341,6 +351,7 @@ public struct Preferences: Sendable, Equatable, Codable {
         self.provider = provider
         self.model = model ?? provider.defaultModel
         self.baseURL = baseURL ?? provider.defaultBaseURL
+        self.thinkingEffort = thinkingEffort
         self.hotKey = hotKey
         self.presetID = presetID
         self.hasCompletedOnboarding = hasCompletedOnboarding
@@ -361,6 +372,7 @@ public struct Preferences: Sendable, Equatable, Codable {
             provider: provider,
             model: try container.decodeIfPresent(String.self, forKey: .model),
             baseURL: try container.decodeIfPresent(String.self, forKey: .baseURL),
+            thinkingEffort: try container.decodeIfPresent(String.self, forKey: .thinkingEffort) ?? "",
             hotKey: try container.decodeIfPresent(HotKeySpec.self, forKey: .hotKey) ?? .default,
             presetID: try container.decodeIfPresent(String.self, forKey: .presetID) ?? Presets.defaultID,
             hasCompletedOnboarding: try container.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? false,

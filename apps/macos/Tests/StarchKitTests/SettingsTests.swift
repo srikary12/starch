@@ -175,6 +175,7 @@ struct PreferencesTests {
                 provider: .openAICompatible,
                 model: "qwen2.5",
                 baseURL: "http://localhost:1234/v1",
+                thinkingEffort: "medium",
                 hotKey: HotKeySpec(keyCode: UInt32(kVK_ANSI_R), modifiers: [.command, .option]),
                 hasCompletedOnboarding: true,
                 debugLogging: true
@@ -220,6 +221,28 @@ struct PreferencesTests {
             let reread = try #require(defaults.data(forKey: PreferencesStore.defaultsKey))
             #expect(try JSONDecoder().decode(Preferences.self, from: reread).hotKey == .default)
         }
+    }
+
+    /// Preferences are stored as one JSON blob, so a field added in a new
+    /// version must not make every existing user's settings undecodable — they
+    /// would silently revert to defaults on upgrade, which for this field
+    /// means a different provider and a different model.
+    @Test("settings written before thinking effort existed still load")
+    func decodesSettingsFromAnOlderBuild() throws {
+        let older = """
+        {"provider":"gemini","model":"gemini-flash-latest",
+         "baseURL":"https://generativelanguage.googleapis.com/v1beta",
+         "presetID":"neutral","hasCompletedOnboarding":true,"debugLogging":false}
+        """
+        let loaded = try JSONDecoder().decode(Preferences.self, from: Data(older.utf8))
+
+        #expect(loaded.provider == .gemini)
+        #expect(loaded.model == "gemini-flash-latest")
+        #expect(loaded.presetID == "neutral")
+        #expect(loaded.hasCompletedOnboarding)
+        // Absent means "ask for nothing", which leaves behaviour exactly as it
+        // was before the setting existed.
+        #expect(loaded.thinkingEffort.isEmpty)
     }
 
     /// The API key belongs in the Keychain. If it ever reaches UserDefaults it
