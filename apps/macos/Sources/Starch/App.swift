@@ -164,6 +164,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var presetSetPath: String?
     private var presetProblem: String?
 
+    /// The daemon's provider and model table, for the settings pickers.
+    ///
+    /// Empty until the daemon answers. Nothing depends on it having arrived:
+    /// the fields are editable, so an empty catalog costs suggestions, not
+    /// the ability to configure anything.
+    private var catalog: ModelCatalog = .empty
+
     /// API keys read this launch, by Keychain account.
     ///
     /// The daemon holds the key in memory only, so every daemon restart costs
@@ -263,7 +270,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // until one is up. Status only changes on a real transition —
             // uptime is deliberately excluded from Status's == — so this fires
             // once per daemon start, not on every heartbeat.
-            if status.isHealthy { self?.refreshPresetsFromDaemon() }
+            if status.isHealthy {
+                self?.refreshPresetsFromDaemon()
+                self?.refreshCatalogFromDaemon()
+            }
         }
         self.daemon = daemon
         daemon.start()
@@ -520,7 +530,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 provider: preferences.provider.rawValue,
                 model: preferences.model,
                 baseURL: preferences.baseURL,
-                apiKey: apiKey(for: preferences.provider)
+                apiKey: apiKey(for: preferences.provider),
+                thinkingEffort: preferences.thinkingEffort
             ))
             sessionReady = true
             await refreshPresets(client: client)
@@ -569,6 +580,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let client = daemon?.client else { return }
         Task { @MainActor [weak self] in
             await self?.refreshPresets(client: client)
+        }
+    }
+
+    /// Reads the provider and model catalog from the daemon.
+    ///
+    /// Like presets, this needs no session and no API key — which is the
+    /// point, because the settings window is most often open precisely
+    /// because there is no key yet. Failure is quiet: the pickers fall back to
+    /// offering nothing, and every field still works as a plain text field.
+    private func refreshCatalogFromDaemon() {
+        guard let client = daemon?.client else { return }
+        Task { @MainActor [weak self] in
+            guard let fetched = try? await client.models() else { return }
+            self?.catalog = fetched
+            self?.settingsWindow?.update(catalog: fetched)
         }
     }
 
@@ -702,12 +728,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             controller.presetSet = { [weak self] in
                 (path: self?.presetSetPath, count: self?.presets.count ?? 0, problem: self?.presetProblem)
             }
+            controller.update(catalog: catalog)
             settingsWindow = controller
         }
         // Re-read on every open. Someone who has just fixed their JSON expects
         // the warning to be gone when they come back to look, and the daemon
         // re-parses on the next read, so this is the whole of that story.
         refreshPresetsFromDaemon()
+        refreshCatalogFromDaemon()
         settingsWindow?.show()
     }
 

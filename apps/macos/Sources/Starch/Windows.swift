@@ -42,6 +42,23 @@ enum UI {
         return field
     }
 
+    /// A dropdown that can also be typed into.
+    ///
+    /// A combo box rather than a pop-up button because the daemon's list is
+    /// curated, and therefore always a little behind: a model released after
+    /// this build, a private gateway's URL, or whatever someone has pulled
+    /// into Ollama all have to stay reachable. The list is a convenience,
+    /// never a whitelist — a pure dropdown would lock those people out of
+    /// their own configuration.
+    static func comboBox(placeholder: String, width: CGFloat = 280) -> NSComboBox {
+        let box = NSComboBox()
+        box.placeholderString = placeholder
+        box.isEditable = true
+        box.completes = true
+        box.widthAnchor.constraint(equalToConstant: width).isActive = true
+        return box
+    }
+
     static func vstack(_ views: [NSView], spacing: CGFloat = 10, alignment: NSLayoutConstraint.Attribute = .leading) -> NSStackView {
         let stack = NSStackView(views: views)
         stack.orientation = .vertical
@@ -89,7 +106,7 @@ enum UI {
 // MARK: - Settings
 
 @MainActor
-final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTextFieldDelegate {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSComboBoxDelegate {
     /// Called whenever a non-secret setting changes.
     var onPreferencesChanged: ((Preferences) -> Void)?
     /// Called when the user asks to see onboarding again.
@@ -102,8 +119,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
     private let keychain: Keychain
 
     private let providerPopUp = NSPopUpButton()
-    private let modelField = UI.textField("", placeholder: "model name")
-    private let baseURLField = UI.textField("", placeholder: "https://…")
+    private let modelBox = UI.comboBox(placeholder: "model name")
+    private let baseURLBox = UI.comboBox(placeholder: "https://…")
+    private let effortPopUp = NSPopUpButton()
+    private let sourceNoteLabel = UI.secondary("")
     private let presetStatusLabel = UI.secondary("")
     private let editPresetsButton = NSButton(title: "Edit presets.json…", target: nil, action: nil)
     private let revealPresetsButton = NSButton(title: "Show in Finder", target: nil, action: nil)
@@ -115,11 +134,26 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     private var recordingMonitor: Any?
 
+    /// The daemon's provider and model table. Empty until it answers, which
+    /// every picker treats as "no suggestions" rather than as an error — the
+    /// fields still work, they just stop offering anything.
+    private var catalog: ModelCatalog = .empty
+
+    /// The Thinking row, hidden outright for a model with no reasoning
+    /// controls. Hidden rather than disabled: a greyed-out control implies the
+    /// model has a setting we are refusing to show, when in fact asking for
+    /// one is what some of those models reject.
+    private var effortRow: NSView?
+
+    /// Shown in the effort picker for "send nothing and let the endpoint
+    /// decide". The escape hatch for a gateway that rejects the parameter.
+    private static let endpointDefaultTitle = "Endpoint default"
+
     init(preferences: Preferences, store: PreferencesStore, keychain: Keychain) {
         self.preferences = preferences
         self.store = store
         self.keychain = keychain
-        super.init(window: UI.window(title: "\(Brand.name) Settings", size: NSSize(width: 520, height: 430)))
+        super.init(window: UI.window(title: "\(Brand.name) Settings", size: NSSize(width: 520, height: 520)))
         window?.delegate = self
         buildUI()
         refresh()
@@ -162,8 +196,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
             providerPopUp.lastItem?.representedObject = provider.rawValue
         }
 
-        modelField.delegate = self
-        baseURLField.delegate = self
+        modelBox.delegate = self
+        baseURLBox.delegate = self
+        effortPopUp.target = self
+        effortPopUp.action = #selector(effortChanged)
         apiKeyField.placeholderString = "paste your API key"
         apiKeyField.widthAnchor.constraint(equalToConstant: 280).isActive = true
 
@@ -190,11 +226,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
         )
         onboardingButton.bezelStyle = .rounded
 
+        let effortRow = UI.hstack([UI.fieldLabel("Thinking"), effortPopUp])
+        self.effortRow = effortRow
+
         let content = UI.vstack([
             UI.heading("Model"),
             UI.hstack([UI.fieldLabel("Provider"), providerPopUp]),
-            UI.hstack([UI.fieldLabel("Model"), modelField]),
-            UI.hstack([UI.fieldLabel("Endpoint"), baseURLField]),
+            // Endpoint above Model because that is the order they depend in:
+            // the models on offer are a property of the endpoint, not of the
+            // provider. api.openai.com serves GPT models; localhost:11434
+            // serves whatever this machine has pulled.
+            UI.hstack([UI.fieldLabel("Endpoint"), baseURLBox]),
+            UI.hstack([UI.fieldLabel("Model"), modelBox]),
+            UI.hstack([UI.fieldLabel(""), sourceNoteLabel]),
+            effortRow,
             UI.hstack([UI.fieldLabel("API key"), apiKeyField, saveKey, removeKey]),
             UI.hstack([UI.fieldLabel(""), keyStatusLabel]),
 
@@ -244,11 +289,103 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
     private func refresh() {
         providerPopUp.selectItem(at: ProviderID.allCases.firstIndex(of: preferences.provider) ?? 0)
-        modelField.stringValue = preferences.model
-        baseURLField.stringValue = preferences.baseURL
+        modelBox.stringValue = preferences.model
+        baseURLBox.stringValue = preferences.baseURL
         hotKeyButton.title = preferences.hotKey.displayString
         debugCheckbox.state = preferences.debugLogging ? .on : .off
+        refreshSuggestions()
         refreshKeyStatus()
+    }
+
+    /// Hands the window the daemon's catalog, once it has answered.
+    func update(catalog: ModelCatalog) {
+        guard catalog != self.catalog else { return }
+        self.catalog = catalog
+        refreshSuggestions()
+    }
+
+    /// Repopulates both lists and the Thinking row from the catalog.
+    ///
+    /// It deliberately never overwrites what is in the fields. Someone halfway
+    /// through typing a model name this build has never heard of is exactly
+    /// the case a curated list has to keep working.
+    private func refreshSuggestions() {
+        let provider = catalog.provider(preferences.provider)
+
+        baseURLBox.removeAllItems()
+        baseURLBox.addItems(withObjectValues: provider?.endpoints.map(\.url) ?? [])
+
+        let models = catalog.models(provider: preferences.provider, baseURL: preferences.baseURL)
+        modelBox.removeAllItems()
+        modelBox.addItems(withObjectValues: models.map(\.id))
+
+        refreshSourceNote(provider: provider, models: models)
+        refreshEffort()
+    }
+
+    /// The line under the model field: what the selected model is called, or
+    /// why the list is empty.
+    ///
+    /// The lists hold bare ids, because an editable field's value has to be
+    /// the thing that goes on the wire. This is where the friendly name and
+    /// the daemon's note go instead.
+    private func refreshSourceNote(provider: CatalogProvider?, models: [CatalogModel]) {
+        let endpoint = provider?.endpoint(url: preferences.baseURL)
+
+        if let model = models.first(where: { $0.id == preferences.model }) {
+            sourceNoteLabel.stringValue = model.label
+        } else if let note = endpoint?.note, !note.isEmpty {
+            sourceNoteLabel.stringValue = note
+        } else if endpoint == nil, !catalog.isEmpty {
+            sourceNoteLabel.stringValue = "Custom endpoint — type the name of a model it serves."
+        } else if models.contains(where: { $0.id == preferences.model }) == false, !models.isEmpty {
+            sourceNoteLabel.stringValue = "Not in the list — it will still be used exactly as typed."
+        } else {
+            sourceNoteLabel.stringValue = ""
+        }
+    }
+
+    /// Shows the Thinking row for a model that has reasoning controls, with
+    /// exactly the levels that model accepts.
+    private func refreshEffort() {
+        guard let thinking = catalog.thinking(
+            provider: preferences.provider,
+            baseURL: preferences.baseURL,
+            model: preferences.model
+        ) else {
+            effortRow?.isHidden = true
+            // And stop sending one. Some models reject the parameter outright,
+            // so a level left over from a previous selection is not harmless.
+            if !preferences.thinkingEffort.isEmpty {
+                preferences.thinkingEffort = ""
+                commit()
+            }
+            return
+        }
+
+        effortRow?.isHidden = false
+        effortPopUp.removeAllItems()
+        effortPopUp.addItem(withTitle: Self.endpointDefaultTitle)
+        effortPopUp.lastItem?.representedObject = ""
+        for level in thinking.levels {
+            effortPopUp.addItem(withTitle: level.capitalized)
+            effortPopUp.lastItem?.representedObject = level
+        }
+
+        // A thinking model with nothing chosen starts at the catalog's
+        // default, which is "low" nearly everywhere. This is an inline
+        // rewriter on a 500ms first-token budget and rewriting a sentence is
+        // not a reasoning task, so the alternative is every rewrite silently
+        // paying for reasoning nobody asked for.
+        if preferences.thinkingEffort.isEmpty, thinking.levels.contains(thinking.defaultLevel) {
+            preferences.thinkingEffort = thinking.defaultLevel
+            commit()
+        }
+
+        let index = effortPopUp.itemArray.firstIndex {
+            ($0.representedObject as? String) == preferences.thinkingEffort
+        }
+        effortPopUp.selectItem(at: index ?? 0)
     }
 
     private func refreshKeyStatus() {
@@ -279,25 +416,101 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSTe
 
         // Carry the defaults across only when the user has not customised the
         // old ones, so switching providers does not silently discard a
-        // hand-typed endpoint.
+        // hand-typed endpoint. Both the catalog's answer and the compiled-in
+        // fallback count as untouched: a setting saved before the catalog
+        // existed is still not a customisation.
         let wasDefaultModel = preferences.model == preferences.provider.defaultModel
+            || preferences.model == defaultModel(for: preferences.provider, baseURL: preferences.baseURL)
         let wasDefaultURL = preferences.baseURL == preferences.provider.defaultBaseURL
+            || preferences.baseURL == defaultBaseURL(for: preferences.provider)
 
         preferences.provider = provider
-        if wasDefaultModel { preferences.model = provider.defaultModel }
-        if wasDefaultURL { preferences.baseURL = provider.defaultBaseURL }
+        if wasDefaultURL { preferences.baseURL = defaultBaseURL(for: provider) }
+        if wasDefaultModel { preferences.model = defaultModel(for: provider, baseURL: preferences.baseURL) }
+        // The old provider's level means nothing to the new one — Gemini has
+        // no "xhigh" and Anthropic no "minimal" — and sending one it does not
+        // know is a rejected request. refreshEffort() puts the new model's
+        // own default back.
+        preferences.thinkingEffort = ""
 
         refresh()
         commit()
     }
 
-    func controlTextDidEndEditing(_ notification: Notification) {
-        guard let field = notification.object as? NSTextField else { return }
-        switch field {
-        case modelField: preferences.model = field.stringValue.trimmingCharacters(in: .whitespaces)
-        case baseURLField: preferences.baseURL = field.stringValue.trimmingCharacters(in: .whitespaces)
+    /// The endpoint to start a provider from: the catalog's first, falling
+    /// back to the compiled-in one for when the daemon has not answered yet.
+    private func defaultBaseURL(for provider: ProviderID) -> String {
+        catalog.provider(provider)?.endpoints.first?.url ?? provider.defaultBaseURL
+    }
+
+    private func defaultModel(for provider: ProviderID, baseURL: String) -> String {
+        catalog.provider(provider)?.endpoint(url: baseURL)?.defaultModel ?? provider.defaultModel
+    }
+
+    /// A list selection. `stringValue` is not yet updated when this fires, so
+    /// the chosen item is read directly — reading the field here is the
+    /// classic way to get a combo box that lags one selection behind.
+    func comboBoxSelectionDidChange(_ notification: Notification) {
+        guard let box = notification.object as? NSComboBox,
+              let value = box.objectValueOfSelectedItem as? String
+        else { return }
+
+        switch box {
+        case baseURLBox: chooseEndpoint(value)
+        case modelBox: chooseModel(value)
         default: return
         }
+    }
+
+    func controlTextDidEndEditing(_ notification: Notification) {
+        guard let field = notification.object as? NSTextField else { return }
+        let value = field.stringValue.trimmingCharacters(in: .whitespaces)
+        switch field {
+        case modelBox: chooseModel(value)
+        case baseURLBox: chooseEndpoint(value)
+        default: return
+        }
+    }
+
+    private func chooseEndpoint(_ url: String) {
+        let changed = url != preferences.baseURL
+        preferences.baseURL = url
+        baseURLBox.stringValue = url
+
+        // Only when the endpoint actually changed, and only when the model it
+        // leaves behind is not one this endpoint serves. Resetting on every
+        // end-editing would throw away a model deliberately typed for a known
+        // endpoint the moment the user clicked away.
+        if changed,
+           let endpoint = catalog.provider(preferences.provider)?.endpoint(url: url),
+           endpoint.model(id: preferences.model) == nil,
+           let fallback = endpoint.defaultModel
+        {
+            preferences.model = fallback
+            modelBox.stringValue = fallback
+            preferences.thinkingEffort = ""
+        }
+
+        refreshSuggestions()
+        commit()
+    }
+
+    private func chooseModel(_ id: String) {
+        if id != preferences.model {
+            // Levels differ per model, so one chosen for the previous model
+            // may not exist here. refreshEffort() reinstates this model's own
+            // default rather than leaving a level it would reject.
+            preferences.thinkingEffort = ""
+        }
+        preferences.model = id
+        modelBox.stringValue = id
+
+        refreshSuggestions()
+        commit()
+    }
+
+    @objc private func effortChanged() {
+        preferences.thinkingEffort = (effortPopUp.selectedItem?.representedObject as? String) ?? ""
         commit()
     }
 
