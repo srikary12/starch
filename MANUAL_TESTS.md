@@ -106,7 +106,7 @@ interactive prompt that would hang an unattended run — so it is covered here.
 | 34 | Quit and relaunch, open Settings | Status still reports a saved key |
 | 35 | Click Remove | Status flips to no key; the Keychain item is gone |
 | 36 | Switch provider with defaults untouched | Model and endpoint follow the new provider |
-| 37 | Type a custom endpoint, then switch provider | Custom value is **not** silently overwritten |
+| 37 | Type a custom endpoint, then switch provider | Replaced by the new provider's own endpoint. Deliberate since M5 — see test 101. |
 | 38 | Save a key per provider, switch between them | Each provider keeps its own key |
 | 39 | Toggle verbose logging | Daemon restarts; `make logs` shows debug lines |
 
