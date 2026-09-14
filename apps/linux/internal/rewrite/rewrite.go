@@ -9,11 +9,11 @@ package rewrite
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/srikary12/starch/apps/linux/internal/client"
 	"github.com/srikary12/starch/apps/linux/internal/settings"
+	"github.com/srikary12/starch/internal/catalog"
 )
 
 // Config is everything needed to configure a daemon session.
@@ -34,17 +34,17 @@ func (c Config) sessionRequest() client.SessionRequest {
 	}
 }
 
-// ErrNoProvider reports that nothing has been configured yet.
-var ErrNoProvider = errors.New("no provider is configured. Run `starch config` to choose one")
-
 // EnsureSession hands the daemon its credentials.
 //
 // Called when the shell starts, so the first rewrite does not pay for it, and
 // again whenever a setting changes. The session lives only as long as the
 // daemon process, which is why Run below can still meet a daemon without one.
 func EnsureSession(ctx context.Context, c *client.Client, cfg Config) error {
-	if cfg.Preferences.Provider == "" || cfg.Preferences.Model == "" {
-		return ErrNoProvider
+	// Provider and model both have to be there, and a missing model is its own
+	// message: an endpoint that publishes no model list leaves it for the user
+	// to type, and telling them to pick a provider instead is a dead end.
+	if err := cfg.Preferences.Problem(catalog.Builtin()); err != nil {
+		return err
 	}
 	if _, err := c.Session(ctx, cfg.sessionRequest()); err != nil {
 		return err

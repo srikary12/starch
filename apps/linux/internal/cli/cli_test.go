@@ -305,3 +305,40 @@ func TestUnknownFlagIsReported(t *testing.T) {
 		t.Fatal("an unknown flag was accepted")
 	}
 }
+
+// Choosing an endpoint that publishes no model list must say so there and
+// then. Finding out at the moment you try to rewrite something is too late,
+// and "no provider is configured" would be the wrong thing to find out.
+func TestConfigSaysWhenAProviderNeedsAModelTyped(t *testing.T) {
+	h := newHarness(t)
+	built := catalog.Builtin()
+
+	probe := settings.Default()
+	probe.UseProvider(built, "openai_compatible")
+	if probe.Model != "" {
+		t.Skip("this endpoint now carries a default model")
+	}
+
+	if err := h.run(t, "--provider", "openai_compatible"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out := h.out.String()
+	if !strings.Contains(out, "Not ready") {
+		t.Fatalf("output does not flag an unusable configuration:\n%s", out)
+	}
+	if !strings.Contains(out, "--model") {
+		t.Errorf("output does not say which command sets a model:\n%s", out)
+	}
+	endpoint := settings.FindEndpoint(built, probe.Provider, probe.BaseURL)
+	if endpoint != nil && endpoint.Note != "" && !strings.Contains(out, endpoint.Note) {
+		t.Errorf("output does not pass on %q:\n%s", endpoint.Note, out)
+	}
+
+	// And typing one clears it.
+	if err := h.run(t, "--model", "qwen3"); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if strings.Contains(h.out.String(), "Not ready") {
+		t.Errorf("still flagged after a model was set:\n%s", h.out.String())
+	}
+}

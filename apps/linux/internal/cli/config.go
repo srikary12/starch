@@ -237,6 +237,12 @@ func printSettings(env Env, prefs settings.Preferences) {
 	fmt.Fprintf(out, "Shortcut   %s\n", prefs.HotKey)
 	fmt.Fprintf(out, "API key    %s\n", describeKey(env, prefs.Provider))
 	fmt.Fprintf(out, "Settings   %s\n", env.Store.Path())
+
+	// Last, and unmissable: a configuration that cannot be used yet says so
+	// here rather than at the moment someone tries to rewrite something.
+	if problem := prefs.Problem(env.Catalog); problem != nil {
+		fmt.Fprintf(out, "\nNot ready: %v\n", problem)
+	}
 }
 
 // describeKey reports whether a key is stored without reading it, and without
@@ -272,6 +278,11 @@ func describeProvider(cat catalog.Catalog, id string) string {
 }
 
 func describeModel(cat catalog.Catalog, prefs settings.Preferences) string {
+	if prefs.Model == "" {
+		// Not a gap in the table: an endpoint serving whatever a machine has
+		// pulled cannot have a default, and the note says what to type.
+		return "not set"
+	}
 	model := settings.FindModel(cat, prefs.Provider, prefs.BaseURL, prefs.Model)
 	if model == nil {
 		return prefs.Model

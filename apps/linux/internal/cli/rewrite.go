@@ -68,8 +68,8 @@ func RunRewrite(ctx context.Context, args []string, env RewriteEnv) error {
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "warning: %v\n", err)
 	}
-	if prefs.Provider == "" || prefs.Model == "" {
-		return rewrite.ErrNoProvider
+	if err := prefs.Problem(catalog.Builtin()); err != nil {
+		return err
 	}
 
 	key, err := apiKey(env, prefs)

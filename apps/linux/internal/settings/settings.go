@@ -62,6 +62,43 @@ func Default() Preferences {
 	return p
 }
 
+// ErrNoProvider reports that nothing has been configured yet.
+var ErrNoProvider = errors.New("no provider is configured. Run `starch config` to choose one")
+
+// ErrNoModel reports that a provider is chosen but a model is not.
+//
+// Its own error because it is a different situation with a different fix, and
+// a reachable one rather than a theoretical one: an endpoint whose models
+// cannot be known ahead of time — a local Ollama, a gateway — deliberately
+// carries no default, so choosing it leaves the model for the user to type.
+// Reporting that as "no provider is configured" sends someone to re-pick the
+// provider they just picked.
+var ErrNoModel = errors.New("no model is set")
+
+// Problem reports why these preferences cannot be used yet, or nil.
+//
+// The endpoint's own note is included where there is one, because that is the
+// text written for exactly this moment: "Type the model you have pulled, e.g.
+// qwen3 or llama3.2" is the answer, and it already lives in the catalog.
+func (p Preferences) Problem(cat catalog.Catalog) error {
+	if p.Provider == "" {
+		return ErrNoProvider
+	}
+	if p.Model != "" {
+		return nil
+	}
+
+	guidance := "Run `starch config --model <name>`."
+	if endpoint := FindEndpoint(cat, p.Provider, p.BaseURL); endpoint != nil && endpoint.Note != "" {
+		guidance = endpoint.Note + " Run `starch config --model <name>`."
+	}
+	where := p.BaseURL
+	if where == "" {
+		where = p.Provider
+	}
+	return fmt.Errorf("%w for %s. %s", ErrNoModel, where, guidance)
+}
+
 // FindProvider returns the named provider from cat, or nil.
 func FindProvider(cat catalog.Catalog, id string) *catalog.Provider {
 	for i := range cat.Providers {
@@ -86,6 +123,22 @@ func EndpointDefaults(cat catalog.Catalog, providerID string) (baseURL, model st
 	}
 	endpoint := provider.Endpoints[0]
 	return endpoint.URL, endpoint.DefaultModel
+}
+
+// FindEndpoint returns the provider's endpoint with this base URL, or its
+// first one when the URL is not in the table — a hand-typed gateway still
+// belongs to the provider that will be asked to talk to it.
+func FindEndpoint(cat catalog.Catalog, providerID, baseURL string) *catalog.Endpoint {
+	provider := FindProvider(cat, providerID)
+	if provider == nil || len(provider.Endpoints) == 0 {
+		return nil
+	}
+	for i := range provider.Endpoints {
+		if provider.Endpoints[i].URL == baseURL {
+			return &provider.Endpoints[i]
+		}
+	}
+	return &provider.Endpoints[0]
 }
 
 // FindModel returns the named model within a provider's endpoint, or nil. A

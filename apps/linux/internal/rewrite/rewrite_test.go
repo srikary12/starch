@@ -3,6 +3,7 @@ package rewrite
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"os"
@@ -186,5 +187,21 @@ func TestARewriteIsRetriedOnlyOnce(t *testing.T) {
 	defer stub.mu.Unlock()
 	if stub.rewrites != 2 {
 		t.Errorf("got %d attempts, want two", stub.rewrites)
+	}
+}
+
+// Neither front end may hand the daemon an incomplete session. The daemon
+// would take it and the failure would arrive from the provider, worded for a
+// problem the user does not have.
+func TestEnsureSessionRefusesAnIncompleteConfiguration(t *testing.T) {
+	c := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("the daemon was called with an incomplete configuration: %s", r.URL.Path)
+	})
+
+	prefs := settings.Default()
+	prefs.Model = ""
+	err := EnsureSession(context.Background(), c, Config{Preferences: prefs})
+	if !errors.Is(err, settings.ErrNoModel) {
+		t.Fatalf("err = %v, want ErrNoModel", err)
 	}
 }

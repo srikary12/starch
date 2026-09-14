@@ -170,6 +170,9 @@ func TestALocalEndpointNeedsNeitherKeyNorKeyring(t *testing.T) {
 
 	prefs := settings.Default()
 	prefs.UseProvider(built, local.ID)
+	// A local endpoint publishes no model list, so choosing one leaves the
+	// model for the user to type. Typing it is part of configuring it.
+	prefs.Model = "qwen3"
 
 	h := newRewriteHarness(t, prefs)
 	h.secrets.openErr = errors.New("no keyring is running")
@@ -180,6 +183,35 @@ func TestALocalEndpointNeedsNeitherKeyNorKeyring(t *testing.T) {
 	}
 	if !strings.Contains(h.out.String(), "Thanks for the update") {
 		t.Errorf("stdout = %q", h.out.String())
+	}
+}
+
+// Choosing Ollama and stopping there is a configuration someone will really
+// have. The message has to name the missing piece and what to type, not send
+// them back to re-pick the provider they just picked.
+func TestRewriteWithoutAModelSaysWhatToType(t *testing.T) {
+	built := catalog.Builtin()
+	prefs := settings.Default()
+	prefs.UseProvider(built, "openai_compatible")
+	if prefs.Model != "" {
+		t.Skip("this endpoint now carries a default model")
+	}
+
+	h := newRewriteHarness(t, prefs)
+	h.env.Stdin = strings.NewReader("thx")
+
+	err := RunRewrite(context.Background(), nil, h.env)
+	if !errors.Is(err, settings.ErrNoModel) {
+		t.Fatalf("err = %v, want ErrNoModel", err)
+	}
+	if !strings.Contains(err.Error(), "--model") {
+		t.Errorf("error %q does not say which command sets one", err)
+	}
+	if !strings.Contains(err.Error(), prefs.BaseURL) {
+		t.Errorf("error %q does not name the endpoint", err)
+	}
+	if h.connected {
+		t.Error("a daemon was started for a configuration that cannot be used")
 	}
 }
 

@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -271,5 +272,74 @@ func TestDefaultPathIsInTheConfigDirectory(t *testing.T) {
 	}
 	if filepath.Base(path) != FileName {
 		t.Errorf("path = %q", path)
+	}
+}
+
+// Two different situations with two different fixes. Collapsing them sends
+// someone who has chosen Ollama back to re-pick the provider they just picked.
+func TestProblemTellsTheTwoMissingPiecesApart(t *testing.T) {
+	built := catalog.Builtin()
+
+	if err := Default().Problem(built); err != nil {
+		t.Errorf("the defaults are not usable: %v", err)
+	}
+
+	var nothing Preferences
+	if err := nothing.Problem(built); !errors.Is(err, ErrNoProvider) {
+		t.Errorf("Problem = %v, want ErrNoProvider", err)
+	}
+
+	prefs := Default()
+	prefs.UseProvider(built, "openai_compatible")
+	if prefs.Model != "" {
+		t.Skip("this endpoint now carries a default model")
+	}
+	err := prefs.Problem(built)
+	if !errors.Is(err, ErrNoModel) {
+		t.Fatalf("Problem = %v, want ErrNoModel", err)
+	}
+	if !strings.Contains(err.Error(), prefs.BaseURL) {
+		t.Errorf("%q does not name the endpoint", err)
+	}
+	// The catalog already holds the sentence written for this moment.
+	endpoint := FindEndpoint(built, prefs.Provider, prefs.BaseURL)
+	if endpoint == nil || endpoint.Note == "" {
+		t.Fatal("the endpoint has neither a default model nor a note")
+	}
+	if !strings.Contains(err.Error(), endpoint.Note) {
+		t.Errorf("%q does not pass on the endpoint's own guidance %q", err, endpoint.Note)
+	}
+}
+
+// The invariant that makes the message above possible. An endpoint may
+// truthfully have no default model — a local Ollama serves whatever that
+// machine has pulled — but then it owes the user a sentence saying what to
+// type, or choosing it leads to a dead end.
+func TestEveryEndpointHasADefaultModelOrSaysWhatToType(t *testing.T) {
+	for _, provider := range catalog.Builtin().Providers {
+		for _, endpoint := range provider.Endpoints {
+			if endpoint.DefaultModel == "" && endpoint.Note == "" {
+				t.Errorf("%s / %s has no default model and no note explaining what to type",
+					provider.ID, endpoint.URL)
+			}
+		}
+	}
+}
+
+func TestFindEndpointFallsBackToTheFirst(t *testing.T) {
+	built := catalog.Builtin()
+	provider := built.Providers[0]
+
+	if got := FindEndpoint(built, provider.ID, provider.Endpoints[0].URL); got == nil ||
+		got.URL != provider.Endpoints[0].URL {
+		t.Errorf("exact match = %+v", got)
+	}
+	// A hand-typed gateway still belongs to the provider that will be asked to
+	// reach it, so its note and identity are the provider's first endpoint's.
+	if got := FindEndpoint(built, provider.ID, "https://a-gateway.example/v1"); got == nil {
+		t.Error("an unlisted endpoint resolved to nothing")
+	}
+	if got := FindEndpoint(built, "altavista", ""); got != nil {
+		t.Errorf("unknown provider resolved to %+v", got)
 	}
 }
