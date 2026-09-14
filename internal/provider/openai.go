@@ -22,6 +22,11 @@ type OpenAICompatible struct {
 	model   string
 }
 
+// OpenAIDefaultBaseURL is OpenAI's own endpoint, used when a session names the
+// "openai" provider and supplies no base_url. The compatible category has no
+// equivalent default on purpose: there, the endpoint is the entire point.
+const OpenAIDefaultBaseURL = "https://api.openai.com/v1"
+
 // NewOpenAICompatible builds a provider.
 //
 // baseURL is required and is expected to include whatever version prefix the

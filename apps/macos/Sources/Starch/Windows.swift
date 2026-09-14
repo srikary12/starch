@@ -121,6 +121,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
     private let providerPopUp = NSPopUpButton()
     private let modelBox = UI.comboBox(placeholder: "model name")
     private let baseURLBox = UI.comboBox(placeholder: "https://…")
+    // The same two settings as plain fields, shown instead of the combo boxes
+    // when there is nothing to suggest. Exactly one of each pair is ever
+    // visible; NSStackView drops the hidden one out of the layout.
+    private let modelField = UI.textField("", placeholder: "model name")
+    private let baseURLField = UI.textField("", placeholder: "https://…")
     private let effortPopUp = NSPopUpButton()
     private let sourceNoteLabel = UI.secondary("")
     private let presetStatusLabel = UI.secondary("")
@@ -198,6 +203,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
 
         modelBox.delegate = self
         baseURLBox.delegate = self
+        modelField.delegate = self
+        baseURLField.delegate = self
         effortPopUp.target = self
         effortPopUp.action = #selector(effortChanged)
         apiKeyField.placeholderString = "paste your API key"
@@ -236,8 +243,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
             // the models on offer are a property of the endpoint, not of the
             // provider. api.openai.com serves GPT models; localhost:11434
             // serves whatever this machine has pulled.
-            UI.hstack([UI.fieldLabel("Endpoint"), baseURLBox]),
-            UI.hstack([UI.fieldLabel("Model"), modelBox]),
+            UI.hstack([UI.fieldLabel("Endpoint"), baseURLBox, baseURLField]),
+            UI.hstack([UI.fieldLabel("Model"), modelBox, modelField]),
             UI.hstack([UI.fieldLabel(""), sourceNoteLabel]),
             effortRow,
             UI.hstack([UI.fieldLabel("API key"), apiKeyField, saveKey, removeKey]),
@@ -289,8 +296,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
 
     private func refresh() {
         providerPopUp.selectItem(at: ProviderID.allCases.firstIndex(of: preferences.provider) ?? 0)
-        modelBox.stringValue = preferences.model
-        baseURLBox.stringValue = preferences.baseURL
         hotKeyButton.title = preferences.hotKey.displayString
         debugCheckbox.state = preferences.debugLogging ? .on : .off
         refreshSuggestions()
@@ -301,7 +306,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
     func update(catalog: ModelCatalog) {
         guard catalog != self.catalog else { return }
         self.catalog = catalog
-        refreshSuggestions()
+        // Suggestions only. Whatever is half-typed in a field is the user's.
+        refreshSuggestions(replacingText: false)
     }
 
     /// Repopulates both lists and the Thinking row from the catalog.
@@ -309,18 +315,72 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
     /// It deliberately never overwrites what is in the fields. Someone halfway
     /// through typing a model name this build has never heard of is exactly
     /// the case a curated list has to keep working.
-    private func refreshSuggestions() {
+    /// `replacingText` separates the two reasons this runs.
+    ///
+    /// A settings change is authoritative: the values just changed because the
+    /// user changed them, so the fields must show the new ones even if one of
+    /// them holds the keyboard focus. The catalog arriving is not: only the
+    /// suggestions changed, and it can land mid-word, so what is typed stands.
+    ///
+    /// Conflating the two is what broke switching provider. An editable
+    /// NSComboBox holds a field editor for as long as it has focus, and the
+    /// endpoint box can have it the moment the window opens — so the guard
+    /// meant for a mid-word catalog update silently skipped every deliberate
+    /// update too, and the endpoint never visibly changed.
+    private func refreshSuggestions(replacingText: Bool = true) {
         let provider = catalog.provider(preferences.provider)
 
-        baseURLBox.removeAllItems()
-        baseURLBox.addItems(withObjectValues: provider?.endpoints.map(\.url) ?? [])
+        present(
+            suggestions: provider?.endpoints.map(\.url) ?? [],
+            value: preferences.baseURL,
+            in: baseURLBox,
+            or: baseURLField,
+            replacingText: replacingText
+        )
 
         let models = catalog.models(provider: preferences.provider, baseURL: preferences.baseURL)
-        modelBox.removeAllItems()
-        modelBox.addItems(withObjectValues: models.map(\.id))
+        present(
+            suggestions: models.map(\.id),
+            value: preferences.model,
+            in: modelBox,
+            or: modelField,
+            replacingText: replacingText
+        )
 
         refreshSourceNote(provider: provider, models: models)
         refreshEffort()
+    }
+
+    /// Shows a dropdown when there is something to drop down, and a plain text
+    /// field when there is not.
+    ///
+    /// An empty NSComboBox still draws its arrow, and clicking it opens
+    /// nothing. For an OpenAI-compatible endpoint that is not a transient
+    /// state but the permanent one — what a local Ollama holds cannot be known
+    /// from here — so the control itself changes rather than implying there is
+    /// a list behind it. The same applies to any endpoint the catalog does not
+    /// know, and to every field while the helper is still starting.
+    private func present(
+        suggestions: [String],
+        value: String,
+        in box: NSComboBox,
+        or field: NSTextField,
+        replacingText: Bool
+    ) {
+        box.removeAllItems()
+        box.addItems(withObjectValues: suggestions)
+
+        let offering = !suggestions.isEmpty
+        box.isHidden = !offering
+        field.isHidden = offering
+
+        // Both are kept in step so a swap never reveals a stale value. A field
+        // being typed into is spared only when this is the catalog arriving;
+        // a setting the user just changed outranks the text sitting in a box
+        // they have already moved on from.
+        for control in [box, field] where replacingText || control.currentEditor() == nil {
+            if control.stringValue != value { control.stringValue = value }
+        }
     }
 
     /// The line under the model field: what the selected model is called, or
@@ -414,19 +474,18 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
               let provider = ProviderID(rawValue: raw), provider != preferences.provider
         else { return }
 
-        // Carry the defaults across only when the user has not customised the
-        // old ones, so switching providers does not silently discard a
-        // hand-typed endpoint. Both the catalog's answer and the compiled-in
-        // fallback count as untouched: a setting saved before the catalog
-        // existed is still not a customisation.
-        let wasDefaultModel = preferences.model == preferences.provider.defaultModel
-            || preferences.model == defaultModel(for: preferences.provider, baseURL: preferences.baseURL)
-        let wasDefaultURL = preferences.baseURL == preferences.provider.defaultBaseURL
-            || preferences.baseURL == defaultBaseURL(for: preferences.provider)
-
         preferences.provider = provider
-        if wasDefaultURL { preferences.baseURL = defaultBaseURL(for: provider) }
-        if wasDefaultModel { preferences.model = defaultModel(for: provider, baseURL: preferences.baseURL) }
+        // Always the new provider's own endpoint and model. The previous rule
+        // kept a URL that did not look like a default, meaning to protect a
+        // hand-typed gateway — but an endpoint only means anything to the
+        // provider it belongs to, so it also carried api.openai.com across to
+        // Anthropic and produced a configuration that cannot work. Re-typing a
+        // custom gateway after flipping provider and back is the cheaper of
+        // the two mistakes, and the visible behaviour now matches the obvious
+        // expectation: choosing a provider changes the endpoint.
+        let adopted = catalog.defaults(for: provider)
+        preferences.baseURL = adopted.baseURL
+        preferences.model = adopted.model
         // The old provider's level means nothing to the new one — Gemini has
         // no "xhigh" and Anthropic no "minimal" — and sending one it does not
         // know is a rejected request. refreshEffort() puts the new model's
@@ -435,16 +494,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
 
         refresh()
         commit()
-    }
-
-    /// The endpoint to start a provider from: the catalog's first, falling
-    /// back to the compiled-in one for when the daemon has not answered yet.
-    private func defaultBaseURL(for provider: ProviderID) -> String {
-        catalog.provider(provider)?.endpoints.first?.url ?? provider.defaultBaseURL
-    }
-
-    private func defaultModel(for provider: ProviderID, baseURL: String) -> String {
-        catalog.provider(provider)?.endpoint(url: baseURL)?.defaultModel ?? provider.defaultModel
     }
 
     /// A list selection. `stringValue` is not yet updated when this fires, so
@@ -466,8 +515,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
         guard let field = notification.object as? NSTextField else { return }
         let value = field.stringValue.trimmingCharacters(in: .whitespaces)
         switch field {
-        case modelBox: chooseModel(value)
-        case baseURLBox: chooseEndpoint(value)
+        case modelBox, modelField: chooseModel(value)
+        case baseURLBox, baseURLField: chooseEndpoint(value)
         default: return
         }
     }

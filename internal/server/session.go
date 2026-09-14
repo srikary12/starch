@@ -20,6 +20,7 @@ type ProviderID string
 
 const (
 	ProviderAnthropic        ProviderID = "anthropic"
+	ProviderOpenAI           ProviderID = "openai"
 	ProviderOpenAICompatible ProviderID = "openai_compatible"
 	ProviderGemini           ProviderID = "gemini"
 )
@@ -120,6 +121,15 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		}
 		prov = provider.NewGemini(s.httpClient, endpoint, req.APIKey, req.Model)
 
+	case ProviderOpenAI:
+		// Unlike the compatible category below, this provider has a known home,
+		// so an omitted base_url is the common case rather than an error.
+		endpoint = strings.TrimSpace(req.BaseURL)
+		if endpoint == "" {
+			endpoint = provider.OpenAIDefaultBaseURL
+		}
+		prov = provider.NewOpenAICompatible(s.httpClient, endpoint, req.APIKey, req.Model)
+
 	case ProviderOpenAICompatible:
 		endpoint = strings.TrimSpace(req.BaseURL)
 		if endpoint == "" {
@@ -131,7 +141,7 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 
 	default:
 		writeError(w, http.StatusBadRequest, ErrBadRequest,
-			"Unknown provider. Use \"anthropic\", \"gemini\" or \"openai_compatible\".")
+			"Unknown provider. Use \"anthropic\", \"gemini\", \"openai\" or \"openai_compatible\".")
 		return
 	}
 

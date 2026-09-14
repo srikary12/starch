@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/srikary12/starch/internal/provider"
 )
 
 // startSession posts a session and returns the response body.
@@ -122,5 +124,33 @@ func TestSessionRejectsAnUnusableEffort(t *testing.T) {
 				t.Errorf("status = %d, want %d", resp.StatusCode, tt.want)
 			}
 		})
+	}
+}
+
+// "openai" and "openai_compatible" differ in exactly one way that matters to a
+// shell: OpenAI has a known home, so omitting base_url is the common case
+// rather than an error.
+func TestOpenAIDefaultsItsEndpointButCompatibleDoesNot(t *testing.T) {
+	c, _, _, _ := startDaemon(t, Options{})
+
+	resp, decoded := startSession(t, c, sessionRequest{
+		Provider: ProviderOpenAI,
+		Model:    "gpt-5.6-luna",
+		APIKey:   "sk-test-key",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("openai with no base_url: status = %d, want 200", resp.StatusCode)
+	}
+	if decoded.Endpoint != provider.OpenAIDefaultBaseURL {
+		t.Errorf("endpoint = %q, want %q", decoded.Endpoint, provider.OpenAIDefaultBaseURL)
+	}
+
+	// The compatible category still refuses: there, the endpoint is the point.
+	resp, _ = startSession(t, c, sessionRequest{
+		Provider: ProviderOpenAICompatible,
+		Model:    "qwen3",
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("openai_compatible with no base_url: status = %d, want 400", resp.StatusCode)
 	}
 }

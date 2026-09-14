@@ -78,6 +78,33 @@ public struct CatalogEndpoint: Sendable, Equatable, Decodable {
         self.note = note
     }
 
+    // Declaring init(from:) by hand stops the compiler synthesising these, so
+    // they have to be spelled out. With .convertFromSnakeCase the wire's
+    // "default_model" arrives already camel-cased, and matches.
+    private enum CodingKeys: String, CodingKey {
+        case url, name, defaultModel, models, note
+    }
+
+    /// Decoded by hand for one reason: `models` must tolerate a null.
+    ///
+    /// Go marshals a nil slice as `null` rather than `[]`, so an endpoint whose
+    /// models cannot be known ahead of time — a local Ollama — arrives as
+    /// `"models": null`. A strict decode threw on it, and because the catalog
+    /// decodes as a single unit that took down the *whole* table rather than
+    /// the one endpoint: every picker in the window went empty, for every
+    /// provider. The daemon now emits `[]`, and this tolerates both, because
+    /// one side being careful is not the same as the pair being safe.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        url = try container.decode(String.self, forKey: .url)
+        name = try container.decode(String.self, forKey: .name)
+        defaultModel = try container.decodeIfPresent(String.self, forKey: .defaultModel)
+        note = try container.decodeIfPresent(String.self, forKey: .note)
+        // decodeIfPresent returns nil for an explicit null as well as for a
+        // missing key, which is exactly what is wanted here.
+        models = try container.decodeIfPresent([CatalogModel].self, forKey: .models) ?? []
+    }
+
     public func model(id: String) -> CatalogModel? {
         models.first { $0.id == id }
     }
@@ -141,6 +168,23 @@ public struct ModelCatalog: Sendable, Equatable, Decodable {
     /// endpoint's models.
     public func models(provider: ProviderID, baseURL: String) -> [CatalogModel] {
         self.provider(provider)?.endpoint(url: baseURL)?.models ?? []
+    }
+
+    /// The endpoint and model to adopt when the user picks a provider.
+    ///
+    /// Always the chosen provider's own, never what was configured for the
+    /// previous one. An endpoint means nothing outside the provider it belongs
+    /// to: carrying `api.openai.com` across to Anthropic produces a
+    /// configuration that cannot work, however deliberately it was typed.
+    ///
+    /// Falls back to the compiled-in defaults so this is usable in the seconds
+    /// before the daemon has answered, when the catalog is still empty.
+    public func defaults(for provider: ProviderID) -> (baseURL: String, model: String) {
+        let endpoint = self.provider(provider)?.endpoints.first
+        return (
+            baseURL: endpoint?.url ?? provider.defaultBaseURL,
+            model: endpoint?.defaultModel ?? provider.defaultModel
+        )
     }
 
     /// The thinking controls for one selection, or nil if there are none.
