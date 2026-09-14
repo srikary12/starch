@@ -108,7 +108,7 @@ interactive prompt that would hang an unattended run — so it is covered here.
 | 34 | Quit and relaunch, open Settings | Status still reports a saved key |
 | 35 | Click Remove | Status flips to no key; the Keychain item is gone |
 | 36 | Switch provider with defaults untouched | Model and endpoint follow the new provider |
-| 37 | Type a custom endpoint, then switch provider | Custom value is **not** silently overwritten |
+| 37 | Type a custom endpoint, then switch provider | Replaced by the new provider's own endpoint. Deliberate since M5 — see test 101. |
 | 38 | Save a key per provider, switch between them | Each provider keeps its own key |
 | 39 | Toggle verbose logging | Daemon restarts; `make logs` shows debug lines |
 
@@ -417,6 +417,21 @@ here.
 | 97 | Switch provider | Endpoint and model become the new provider's defaults; Thinking resets |
 | 98 | Quit the helper, then open Settings | Lists empty, every field still editable, nothing looks broken |
 | 99 | Upgrade over an existing install | Your provider, model and endpoint are exactly as you left them |
+
+| 100 | Click **into** the Endpoint field, then switch Provider | Endpoint *and* Model both visibly change to the new provider's |
+| 101 | Type a custom endpoint, switch provider, switch back | Resets to the provider default — deliberate, see below |
+
+Test 100 exists because it broke. An editable combo box holds the keyboard
+focus's field editor, and a guard meant to stop an arriving catalog
+overwriting a half-typed word also skipped deliberate updates — so the
+setting changed, committed, and the field on screen did not move. Nothing
+automated can see this: it needs a real window server and real focus.
+
+Test 101 documents a trade-off rather than a bug. A provider switch always
+adopts the new provider's own endpoint, which costs anyone using a custom
+gateway a re-type if they flip provider and come back. The alternative was
+worse: the previous rule preserved anything that did not look like a
+default, and so carried `api.openai.com` across into Anthropic.
 
 Test 91 is the one that matters most. The catalog is curated, so it is always a
 little behind — the day a provider ships a model, typing its name has to be

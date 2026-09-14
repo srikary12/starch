@@ -111,12 +111,18 @@ public struct Keychain: Sendable {
 public enum ProviderID: String, CaseIterable, Sendable, Codable {
     case anthropic
     case gemini
+    case openAI = "openai"
     case openAICompatible = "openai_compatible"
 
     public var displayName: String {
         switch self {
         case .anthropic: "Anthropic"
         case .gemini: "Google AI Studio"
+        case .openAI: "OpenAI"
+        // Everything else speaking the same protocol: Ollama, LM Studio,
+        // OpenRouter, Groq, a private gateway. OpenAI itself is its own entry
+        // above, because bundling them meant one list of GPT models offered to
+        // someone pointing at a local Ollama.
         case .openAICompatible: "OpenAI-compatible"
         }
     }
@@ -125,7 +131,12 @@ public enum ProviderID: String, CaseIterable, Sendable, Codable {
         switch self {
         case .anthropic: "https://api.anthropic.com"
         case .gemini: "https://generativelanguage.googleapis.com/v1beta"
-        case .openAICompatible: "https://api.openai.com/v1"
+        case .openAI: "https://api.openai.com/v1"
+        // Ollama, because once OpenAI has its own entry this category is
+        // "everything else", and a local server is the reason most people
+        // reach for it — it is the answer for anyone who will not send work
+        // text to a third party at all.
+        case .openAICompatible: "http://localhost:11434/v1"
         }
     }
 
@@ -142,7 +153,11 @@ public enum ProviderID: String, CaseIterable, Sendable, Codable {
         // first-token budget, and the task is not reasoning-heavy.
         case .gemini: "gemini-flash-latest"
         // Cheapest of the current family, for the same reason.
-        case .openAICompatible: "gpt-5.6-luna"
+        case .openAI: "gpt-5.6-luna"
+        // A guess, and unavoidably so: what a local server holds is whatever
+        // that machine has pulled. Common enough to be right often, and the
+        // field is typeable when it is not.
+        case .openAICompatible: "qwen3"
         }
     }
 
@@ -155,7 +170,7 @@ public enum ProviderID: String, CaseIterable, Sendable, Codable {
     /// a third party at all.
     public var requiresAPIKey: Bool {
         switch self {
-        case .anthropic, .gemini: true
+        case .anthropic, .gemini, .openAI: true
         case .openAICompatible: false
         }
     }

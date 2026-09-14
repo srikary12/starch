@@ -158,3 +158,74 @@ func TestJSONShapeMatchesTheContract(t *testing.T) {
 		t.Error(`a model encoded "thinking":null; it should be omitted instead`)
 	}
 }
+
+// The bug this exists for: Go marshals a nil slice as null rather than [], and
+// a shell decoding `models` into a non-optional array threw on it — taking the
+// entire catalog down rather than the one endpoint, so every picker in the
+// settings window went empty for every provider.
+//
+// A fixture hand-written in the shell's own tests cannot catch this. It tests
+// the shape its author intended; this tests the shape this package actually
+// emits, which is the only one that reaches a shell.
+func TestNoEndpointEncodesNullModels(t *testing.T) {
+	encoded, err := json.Marshal(Builtin())
+	if err != nil {
+		t.Fatalf("marshalling: %v", err)
+	}
+	if strings.Contains(string(encoded), `"models":null`) {
+		t.Error(`an endpoint encoded "models":null; every endpoint must encode [] instead`)
+	}
+
+	// And again as a decoder sees it, rather than trusting a substring match.
+	var round Catalog
+	if err := json.Unmarshal(encoded, &round); err != nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	for _, p := range round.Providers {
+		for _, e := range p.Endpoints {
+			if e.Models == nil {
+				t.Errorf("%s / %s: models decoded as nil", p.ID, e.Name)
+			}
+		}
+	}
+}
+
+// OpenAI is its own provider, not an endpoint inside the compatible category.
+// Bundled together, the picker offered GPT models to someone pointing at a
+// local Ollama — which is worse than offering none.
+func TestOpenAIIsSeparateFromTheCompatibleCategory(t *testing.T) {
+	var openai, compatible *Provider
+	for i, p := range Builtin().Providers {
+		switch p.ID {
+		case "openai":
+			openai = &Builtin().Providers[i]
+		case "openai_compatible":
+			compatible = &Builtin().Providers[i]
+		}
+	}
+
+	if openai == nil {
+		t.Fatal("no openai provider")
+	}
+	if !openai.RequiresKey {
+		t.Error("OpenAI needs a key, so the shell must be told to ask for one")
+	}
+	if len(openai.Endpoints) == 0 || len(openai.Endpoints[0].Models) == 0 {
+		t.Error("the OpenAI entry carries no models, which is the whole reason it is separate")
+	}
+
+	if compatible == nil {
+		t.Fatal("no openai_compatible provider")
+	}
+	if compatible.RequiresKey {
+		t.Error("the compatible category must not demand a key: a local Ollama needs none")
+	}
+	for _, e := range compatible.Endpoints {
+		if strings.Contains(e.URL, "api.openai.com") {
+			t.Errorf("OpenAI is still listed under the compatible category as %q", e.URL)
+		}
+		if len(e.Models) != 0 {
+			t.Errorf("%s carries models; what a private or local endpoint serves cannot be known here", e.Name)
+		}
+	}
+}

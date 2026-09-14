@@ -152,4 +152,74 @@ struct CatalogTests {
         #expect(empty.models(provider: .gemini, baseURL: "https://example.com").isEmpty)
         #expect(empty.thinking(provider: .gemini, baseURL: "https://example.com", model: "m") == nil)
     }
+
+    /// The regression that emptied every picker in the window.
+    ///
+    /// Go marshals a nil slice as null, so an endpoint whose models cannot be
+    /// known ahead of time arrived as `"models": null`. Because the catalog
+    /// decodes as a single unit, that one null took the entire table down with
+    /// it — not just its own endpoint — so Anthropic and Gemini went empty too.
+    /// The fixture above could never catch it: it was written with `[]`, the
+    /// shape intended rather than the shape the daemon emitted.
+    @Test("a null models array does not take the whole catalog with it")
+    func nullModelsDoesNotBreakEverything() throws {
+        let json = """
+        {"source": "builtin", "providers": [
+          {"id": "anthropic", "name": "Anthropic", "requires_key": true, "endpoints": [
+            {"url": "https://api.anthropic.com", "name": "Anthropic",
+             "models": [{"id": "claude-sonnet-5", "name": "Claude Sonnet 5"}]}]},
+          {"id": "openai_compatible", "name": "OpenAI-compatible", "requires_key": false, "endpoints": [
+            {"url": "http://localhost:11434/v1", "name": "Ollama (local)", "models": null},
+            {"url": "http://localhost:1234/v1", "name": "LM Studio (local)"}]}
+        ]}
+        """
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let catalog = try decoder.decode(ModelCatalog.self, from: Data(json.utf8))
+
+        // The unrelated provider's models are the real assertion: those are
+        // what went missing, and why the symptom was "every model is empty".
+        #expect(catalog.models(provider: .anthropic, baseURL: "https://api.anthropic.com").count == 1)
+
+        // An explicit null and an absent key both mean "none", not a failure.
+        #expect(catalog.models(provider: .openAICompatible, baseURL: "http://localhost:11434/v1").isEmpty)
+        #expect(catalog.models(provider: .openAICompatible, baseURL: "http://localhost:1234/v1").isEmpty)
+    }
+
+    /// Choosing a provider must move the endpoint and the model to that
+    /// provider's own. The rule this replaced kept any URL that did not look
+    /// like a default — meaning to protect a hand-typed gateway, but in
+    /// practice carrying one provider's endpoint into another, where it cannot
+    /// work. It was invisible from the window: the setting changed and the
+    /// field did not.
+    @Test("picking a provider adopts that provider's endpoint and model")
+    func providerDefaults() throws {
+        let catalog = try self.catalog()
+
+        let anthropic = catalog.defaults(for: .anthropic)
+        #expect(anthropic.baseURL == "https://api.anthropic.com")
+        #expect(anthropic.model == "claude-sonnet-5")
+
+        let compatible = catalog.defaults(for: .openAICompatible)
+        #expect(compatible.baseURL == "http://localhost:11434/v1")
+        // Nothing in the catalog can say what a local server holds, so this
+        // falls through to the compiled-in guess rather than to another
+        // endpoint's model.
+        #expect(compatible.model == ProviderID.openAICompatible.defaultModel)
+
+        // Neither ever borrows from the other, which is the whole point.
+        #expect(anthropic.baseURL != compatible.baseURL)
+    }
+
+    /// The window calls this before the daemon has answered, on every launch.
+    @Test("an empty catalog still yields a usable endpoint and model")
+    func defaultsWithoutTheDaemon() {
+        for provider in ProviderID.allCases {
+            let defaults = ModelCatalog.empty.defaults(for: provider)
+            #expect(defaults.baseURL == provider.defaultBaseURL)
+            #expect(defaults.model == provider.defaultModel)
+            #expect(!defaults.baseURL.isEmpty)
+            #expect(!defaults.model.isEmpty)
+        }
+    }
 }

@@ -163,10 +163,10 @@ before you lose an hour to one of them.
 
 Settings live in the menu bar → **Settings…**
 
-- **Provider** — Anthropic, Google AI Studio, or anything OpenAI-compatible.
-  That last one covers OpenAI, OpenRouter, Groq, Together, Ollama and LM Studio
-  with a single implementation. Local models matter here: they are the answer
-  for anyone who will not send work messages to a third party.
+- **Provider** — Anthropic, Google AI Studio, OpenAI, or anything else
+  OpenAI-compatible. That last category covers OpenRouter, Groq, Ollama and LM
+  Studio with a single implementation. Local models matter here: they are the
+  answer for anyone who will not send work messages to a third party.
 - **Endpoint and model** — dropdowns, filled from a list the helper serves. The
   models on offer follow the endpoint, because that is where they live:
   `api.openai.com` serves GPT models, `localhost:11434` serves whatever you

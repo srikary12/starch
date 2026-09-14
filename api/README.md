@@ -187,9 +187,11 @@ to remain reachable by typing its name. `source` is `builtin` today; it exists
 so a future live-listing mode is an added value rather than a contract change.
 
 **Models hang off the endpoint, not the provider**, because that is where they
-live: `openai_compatible` pointed at `api.openai.com` serves GPT models, and
-pointed at `localhost:11434` serves whatever that machine has pulled into
-Ollama. `models` may be empty — for a local server or a gateway like OpenRouter
+live: `openai_compatible` pointed at `localhost:11434` serves whatever that
+machine has pulled into Ollama, and pointed at a private gateway serves whatever
+that gateway proxies. OpenAI itself is a provider of its own for exactly this
+reason — its models *are* known, and listing them under a protocol name offered
+them to people who were not pointed at OpenAI at all. `models` may be empty — for a local server or a gateway like OpenRouter
 that is the truthful answer rather than a gap — in which case `note` says so
 and the shell lets the user type.
 
@@ -200,6 +202,7 @@ and the shell lets the user type.
 | `thinking.default` | What to preselect. `low` nearly everywhere: this is an inline rewriter on a 500ms first-token budget, and most current models think at medium or high unless told otherwise. |
 | `default_model` | Preselect when the endpoint is chosen. Absent where the models cannot be known ahead of time. |
 | `note` | Short qualifier for a picker: why a list is empty, or that an id is a rolling alias. |
+| `models` | **Always an array, never `null`**, even when empty. A shell decoding it into a non-nullable list would otherwise fail on that one endpoint and lose the entire catalog with it. |
 
 Which models take an effort setting, and which levels each accepts, is the
 reason this is curated rather than proxied: no provider's own `/models`
@@ -227,9 +230,14 @@ uses its own native one and the contract stays identical.
 |---|---|---|
 | `anthropic` | optional | Defaults to `https://api.anthropic.com`. |
 | `gemini` | optional | Google AI Studio. Defaults to `https://generativelanguage.googleapis.com/v1beta`. A full request URL is accepted and trimmed to the root — every Google example is one, so that is what gets pasted. Any `?key=` is discarded; the key belongs in the secret store and goes out as `X-Goog-Api-Key`. |
+| `openai` | optional | OpenAI itself. Defaults to `https://api.openai.com/v1`. Separate from the category below because the models it serves are known, and a shell offering them to someone pointed at a local Ollama is worse than offering none. |
 | `openai_compatible` | **required** | Must include the endpoint's own version prefix: `https://api.openai.com/v1`, `http://localhost:11434/v1` for Ollama, `http://localhost:1234/v1` for LM Studio. |
 
 `api_key` may be empty for local endpoints.
+
+Unknown provider values are rejected with `400 bad_request`. Adding one is an
+additive change within `v1`: a shell that has never heard of it simply does not
+offer it.
 
 `thinking_effort` is optional. It is passed through verbatim into whichever
 field the provider uses for it — `output_config.effort` on Anthropic,
