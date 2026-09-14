@@ -9,6 +9,11 @@ module github.com/srikary12/starch/apps/linux
 
 go 1.23
 
-require github.com/srikary12/starch v0.0.0
+require (
+	github.com/godbus/dbus/v5 v5.2.2
+	github.com/srikary12/starch v0.0.0
+)
+
+require golang.org/x/sys v0.27.0 // indirect
 
 replace github.com/srikary12/starch => ../..
