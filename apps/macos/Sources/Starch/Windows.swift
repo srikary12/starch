@@ -121,6 +121,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
     private let providerPopUp = NSPopUpButton()
     private let modelBox = UI.comboBox(placeholder: "model name")
     private let baseURLBox = UI.comboBox(placeholder: "https://…")
+    // The same two settings as plain fields, shown instead of the combo boxes
+    // when there is nothing to suggest. Exactly one of each pair is ever
+    // visible; NSStackView drops the hidden one out of the layout.
+    private let modelField = UI.textField("", placeholder: "model name")
+    private let baseURLField = UI.textField("", placeholder: "https://…")
     private let effortPopUp = NSPopUpButton()
     private let sourceNoteLabel = UI.secondary("")
     private let presetStatusLabel = UI.secondary("")
@@ -198,6 +203,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
 
         modelBox.delegate = self
         baseURLBox.delegate = self
+        modelField.delegate = self
+        baseURLField.delegate = self
         effortPopUp.target = self
         effortPopUp.action = #selector(effortChanged)
         apiKeyField.placeholderString = "paste your API key"
@@ -236,8 +243,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
             // the models on offer are a property of the endpoint, not of the
             // provider. api.openai.com serves GPT models; localhost:11434
             // serves whatever this machine has pulled.
-            UI.hstack([UI.fieldLabel("Endpoint"), baseURLBox]),
-            UI.hstack([UI.fieldLabel("Model"), modelBox]),
+            UI.hstack([UI.fieldLabel("Endpoint"), baseURLBox, baseURLField]),
+            UI.hstack([UI.fieldLabel("Model"), modelBox, modelField]),
             UI.hstack([UI.fieldLabel(""), sourceNoteLabel]),
             effortRow,
             UI.hstack([UI.fieldLabel("API key"), apiKeyField, saveKey, removeKey]),
@@ -289,8 +296,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
 
     private func refresh() {
         providerPopUp.selectItem(at: ProviderID.allCases.firstIndex(of: preferences.provider) ?? 0)
-        modelBox.stringValue = preferences.model
-        baseURLBox.stringValue = preferences.baseURL
         hotKeyButton.title = preferences.hotKey.displayString
         debugCheckbox.state = preferences.debugLogging ? .on : .off
         refreshSuggestions()
@@ -312,15 +317,53 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
     private func refreshSuggestions() {
         let provider = catalog.provider(preferences.provider)
 
-        baseURLBox.removeAllItems()
-        baseURLBox.addItems(withObjectValues: provider?.endpoints.map(\.url) ?? [])
+        present(
+            suggestions: provider?.endpoints.map(\.url) ?? [],
+            value: preferences.baseURL,
+            in: baseURLBox,
+            or: baseURLField
+        )
 
         let models = catalog.models(provider: preferences.provider, baseURL: preferences.baseURL)
-        modelBox.removeAllItems()
-        modelBox.addItems(withObjectValues: models.map(\.id))
+        present(
+            suggestions: models.map(\.id),
+            value: preferences.model,
+            in: modelBox,
+            or: modelField
+        )
 
         refreshSourceNote(provider: provider, models: models)
         refreshEffort()
+    }
+
+    /// Shows a dropdown when there is something to drop down, and a plain text
+    /// field when there is not.
+    ///
+    /// An empty NSComboBox still draws its arrow, and clicking it opens
+    /// nothing. For an OpenAI-compatible endpoint that is not a transient
+    /// state but the permanent one — what a local Ollama holds cannot be known
+    /// from here — so the control itself changes rather than implying there is
+    /// a list behind it. The same applies to any endpoint the catalog does not
+    /// know, and to every field while the helper is still starting.
+    private func present(
+        suggestions: [String],
+        value: String,
+        in box: NSComboBox,
+        or field: NSTextField
+    ) {
+        box.removeAllItems()
+        box.addItems(withObjectValues: suggestions)
+
+        let offering = !suggestions.isEmpty
+        box.isHidden = !offering
+        field.isHidden = offering
+
+        // Both are kept in step so a swap never reveals a stale value — but
+        // never the one being typed into. The catalog can arrive mid-word, and
+        // overwriting the field under the cursor would lose what was typed.
+        for control in [box, field] where control.currentEditor() == nil {
+            if control.stringValue != value { control.stringValue = value }
+        }
     }
 
     /// The line under the model field: what the selected model is called, or
@@ -466,8 +509,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
         guard let field = notification.object as? NSTextField else { return }
         let value = field.stringValue.trimmingCharacters(in: .whitespaces)
         switch field {
-        case modelBox: chooseModel(value)
-        case baseURLBox: chooseEndpoint(value)
+        case modelBox, modelField: chooseModel(value)
+        case baseURLBox, baseURLField: chooseEndpoint(value)
         default: return
         }
     }
