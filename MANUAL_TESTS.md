@@ -8,6 +8,8 @@ Run the M0 list before every release, and the milestone list for whatever you
 are working on. Record results in the PR — including the failures, which are
 the useful part.
 
+Everything up to M5 is macOS. M6 is the Linux shell and needs a Linux desktop.
+
 ```sh
 make install            # test the /Applications copy, not the build directory
 make logs               # in a second terminal
@@ -426,3 +428,69 @@ the level is not reaching the provider, and 95 says whether it left the app.
 
 ---
 
+
+## M6 — the Linux shell
+
+Nothing here needs a Mac. Everything here needs a real Linux desktop, which is
+the point: CI runs this code headlessly against a stand-in keyring and a stub
+provider, so what it proves is that the code is correct, not that the product
+works. These are the checks only a real session can make.
+
+```sh
+make linux-install      # ~/.local/bin/starch and starchd
+```
+
+### Configuration, against a real keyring
+
+| # | Check | Expected |
+|---|---|---|
+| 102 | `starch config` on a machine with nothing set up | Prints defaults, and `API key  not set — run starch config --key` |
+| 103 | `starch config --key`, type a key | Nothing echoes while typing. Key lands in the keyring. |
+| 104 | Open Seahorse or KWalletManager | One entry, labelled for Starch, named for the provider |
+| 105 | `starch config` again | `API key  saved in the keyring`, and **the key itself is nowhere in the output** |
+| 106 | Lock the keyring, then `starch config` | Still prints everything. **No password dialog** — reading settings must not unlock |
+| 107 | Lock the keyring, then `starch rewrite` | Password dialog appears once; the rewrite then proceeds |
+| 108 | Dismiss that dialog instead | "the keyring prompt was dismissed", not a provider error |
+| 109 | `starch config --provider gemini --key`, then switch back to anthropic | The Anthropic key is still there. One entry per provider. |
+| 110 | `printf 'x' \| starch config --key` (piped) | Stored without a prompt, for provisioning scripts |
+| 111 | Stop the keyring daemon entirely, `starch config` | Names GNOME Keyring, KWallet and KeePassXC. Everything else still prints. |
+
+### The rewrite loop
+
+| # | Check | Expected |
+|---|---|---|
+| 112 | `echo "thx for the update" \| starch rewrite` | Text appears **progressively**, not all at once |
+| 113 | Time to the first character | Under 500ms on a warm daemon. This is the budget. |
+| 114 | `starch rewrite --preset concise` and `--preset friendly` | Visibly different output |
+| 115 | Ctrl-C part-way through | Stops at once. Check the provider's dashboard: the generation stopped being billed, not just displayed. |
+| 116 | `starch rewrite` with no stdin, from a terminal | Waits for input, then "there is no text to rewrite" on an empty one |
+| 117 | `ls $XDG_RUNTIME_DIR/starch/` during a rewrite | A `cli-<pid>.sock`, mode `srw-------` |
+| 118 | The same, a second after it finishes | Gone. No daemon left holding a key. |
+| 119 | `pgrep starchd` after several rewrites | Nothing. Each run cleans up after itself. |
+| 120 | `lsof -aPi -p $(pgrep -x starchd)` mid-rewrite | No output. **Any TCP port here is a serious bug.** |
+| 121 | Point `--endpoint` at a local Ollama and clear the key | Works with no key and no keyring at all |
+| 122 | Unplug the network, `starch rewrite` | "could not connect", naming the endpoint — not a stack trace |
+
+### Paths
+
+| # | Check | Expected |
+|---|---|---|
+| 123 | `ls ~/.config/starch/` | `settings.json` and `presets.json`, both `-rw-------` |
+| 124 | Nothing in `~/.config/Starch/` | Capitalised is the macOS spelling and must not appear here |
+| 125 | Edit `settings.json` by hand, set `"hotkey": "Ctrl+C"` | Refused on next run, with the reason, and the default used instead |
+| 126 | Truncate `settings.json` mid-file | Warns, uses defaults, still runs |
+| 127 | Reboot, then `ls $XDG_RUNTIME_DIR/starch/` | Empty. Sockets do not survive a session; settings do. |
+
+Test 115 is the one that matters most, and the one a stub provider cannot
+check. Cancellation has to reach the provider, not just the screen — the
+contract is explicit that a client which merely stops reading has cancelled
+nothing and is still being billed.
+
+Tests 106 and 107 are the pair worth reading together. A keyring prompt is the
+one piece of desktop UI this shell cannot avoid, so it has to appear exactly
+when a key is genuinely needed and never when someone is only looking.
+
+Not here yet, because they do not exist yet: the hot key, the overlay, and
+replacing text in place. Those arrive with the X11 work and bring their own
+list — the interesting part of which will be the capture and replace matrix,
+per application, the way M1's was on macOS.

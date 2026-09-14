@@ -4,9 +4,14 @@
 
 | | |
 |---|---|
-| macOS | 13.0 or later |
+| macOS | 13.0 or later, to build the macOS app |
+| Linux | any X11 desktop, plus a keyring providing `org.freedesktop.secrets` |
 | Go | 1.23+ (`CGO_ENABLED=0` — see below) |
-| Xcode | required to **run tests** |
+| Xcode | required to **run the Swift tests** |
+
+Only the macOS app needs a Mac. The daemon and the Linux shell are pure Go and
+build anywhere, which is why the Linux shell can be developed on a Mac — its
+tests run there too, against a private `dbus-daemon` and a stand-in keyring.
 
 Command Line Tools alone will build and run the app, but ships neither XCTest
 nor swift-testing, so `make test-swift` cannot work. If you have Xcode
@@ -22,11 +27,14 @@ sudo xcode-select -s /Applications/Xcode.app
 ```sh
 make            # build daemon + app bundle
 make run        # build and launch
-make test       # Go (with -race) and Swift suites
+make test       # every suite: Go, the Linux shell, Swift
 make check      # vet + gofmt check + tests
 make logs       # stream app and daemon logs
 make clean
 make help       # everything else
+
+make linux          # build the daemon and the Linux shell
+make linux-install  # into ~/.local/bin; PREFIX overrides
 ```
 
 ## Layout
@@ -43,7 +51,24 @@ apps/macos/
   Sources/StarchKit/    testable logic: framing, client, lifecycle, settings
   Sources/Starch/       AppKit shell: menu bar, windows, hot key
   Tests/
+apps/linux/             its own Go module — see below
+  cmd/starch/           the shell binary
+  internal/client/      the wire contract, over the Unix socket
+  internal/daemon/      spawning and supervising starchd
+  internal/secret/      the API key, in org.freedesktop.secrets
+  internal/settings/    preferences, and the hot key spelling
+  internal/rewrite/     the session handshake and its one retry
+  internal/cli/         `starch config` and `starch rewrite`
 ```
+
+`apps/linux` is a **separate Go module**, the way `apps/macos` is a separate
+Swift package. That is what keeps the root module's dependency list empty:
+`starchd` is the process users run with an API key in memory, and "it depends
+on nothing" is worth being able to say without qualification. A `replace`
+directive lets the shell import `internal/brand`, `internal/config` and
+`internal/catalog` from the daemon rather than restating them — which is why
+its compiled-in provider defaults cannot go stale the way the macOS shell's
+did.
 
 `internal/` must stay OS-independent. Anything macOS-specific that leaks in
 there is a bug — the whole point of the split is that Windows and Linux shells
@@ -69,11 +94,75 @@ someone out of a model their endpoint serves.
 
 ## Dependency policy
 
-**Ask before adding any third-party dependency**, in either language. Today the
-Go module has zero and the Swift package has zero; both use only the standard
-library and system frameworks, and there is no agreed exception. Anything
-proposed has to keep `CGO_ENABLED=0` for the daemon, which is what makes
-cross-compiling to Windows and Linux a one-line build.
+**Ask before adding any third-party dependency**, in any of the three modules.
+The root Go module has zero and the Swift package has zero, and both must stay
+that way: the daemon is the process holding an API key, and everything it links
+is something to audit.
+
+The Linux shell is the one agreed exception, because Go's standard library has
+no X11, no D-Bus and no font rasteriser. Three are approved, all pure Go so
+that `CGO_ENABLED=0` still holds:
+
+| | |
+|---|---|
+| `github.com/jezek/xgb` | the X11 protocol. No dependencies of its own. |
+| `github.com/godbus/dbus/v5` | the Secret Service, and the tray icon |
+| `golang.org/x/image` | rasterising text in the overlay |
+
+Nothing else. In particular no GTK or Qt binding: the shell draws its own
+overlay, which needs no widgets, and that is why settings are a terminal
+command rather than a window.
+
+## The Linux shell targets X11 first
+
+This is a narrowing made on purpose, and it is worth writing down why, because
+"just add Wayland" looks like a small follow-up and is not.
+
+Linux is not one target for this product. It is three, and they differ on
+exactly the three things the shell does — take a global shortcut, read the
+selection, put text back.
+
+**Reading the selection is *better* than on macOS, on two of the three.** On
+X11, and on Wayland under KWin or a wlroots compositor, selecting text already
+puts it in the PRIMARY selection: readable with no synthetic Ctrl-C, no
+clipboard to save and restore, and no permission of any kind. GNOME's Mutter
+implements neither `wlr-data-control` nor its successor `ext-data-control-v1`,
+so GNOME under Wayland is the one place that cannot.
+
+**Putting text back is where Wayland costs something.** The accessibility API
+is the natural route — AT-SPI2 is D-Bus, so it works identically under X11 and
+Wayland — but [no Chromium element exposes `org.a11y.atspi.EditableText`
+anywhere in its tree](https://xa11y.dev/explanation/accessibility-quirks/).
+That rules out every Electron application, VS Code, Slack, Discord and Chrome
+itself, which is the same verdict the M1 matrix reached on macOS: **paste is
+the common path, not the fallback.** Synthetic input is therefore load-bearing,
+and on Wayland that means the RemoteDesktop portal — a permission dialog, a
+persistent remote-control indicator under GNOME, and restore tokens that [do
+not survive a reboot under
+KDE](https://www.mail-archive.com/kde-bugs-dist@kde.org/msg877541.html). Going
+through XWayland's XTEST bridge instead produces ["Allow remote interaction"
+popups every few minutes with almost zero
+context](https://www.semicomplete.com/blog/xdotool-and-exploring-wayland-fragmentation/).
+There is no Wayland equivalent of granting Accessibility once and never
+thinking about it again.
+
+**The overlay cannot follow the selection under GNOME.** Mutter [implements no
+layer-shell](https://gitlab.gnome.org/GNOME/mutter/-/work_items/973) and
+Wayland gives clients no global coordinates. Cursor-anchored is possible on X11
+and on KWin/wlroots, and not on GNOME.
+
+Two smaller ones: there is no system tray under GNOME without a shell extension
+(Ubuntu ships one, Fedora does not), and the global shortcut does have a portal
+— `xdg-desktop-portal-gnome` 48+, KDE, Hyprland — with a universal fallback of
+binding a command in the desktop's own keyboard settings, which is the same
+shape as the Services checkbox macOS already needs.
+
+So X11 buys a complete, prompt-free experience today, on XFCE, Cinnamon, MATE
+and KDE's X11 session, and it is the only way to have the whole loop working
+before deciding what Wayland is worth. The cost is stated plainly: **GNOME
+compile-disabled its X11 session in 49 and removed it in 50**, so this does not
+reach a GNOME desktop at all, and it is not a long-term answer on its own.
+Wayland is a separate decision with its own trade-offs, not a later chore.
 
 ## Quirks that will otherwise cost you an hour
 
@@ -201,6 +290,17 @@ bare `EINVAL`. If you write a test that puts a socket in `t.TempDir()`, it will
 intermittently blow the limit — use the short-path helper in
 `internal/server/server_test.go` instead.
 
+### The Linux shell is a second Go module
+
+`go test ./...` at the root does not reach it, and neither does `go vet`. Both
+root targets shell out to `apps/linux` — `make vet` and `make test` cover
+everything, but a bare `go test ./...` quietly covers less than it looks like.
+
+Running `starch rewrite` spawns a daemon of its own, on its own socket named
+for the process. Two daemons must never contend for one socket, and a one-shot
+command could not authenticate to a daemon someone else spawned anyway: the
+handshake token exists only in that parent's memory.
+
 ### `log` may be shadowed in your shell
 
 If `log show` prints `too many arguments`, your shell has its own `log`. Use
@@ -235,9 +335,17 @@ Run `make check` before opening a PR. That is exactly what CI runs, so a green
 | **Swift** | the Swift suite, on the toolchain it prints |
 | **App bundle** | a universal build, then checks both binaries carry both slices, the version really got substituted into `Info.plist`, the bundle identifier has not moved, and the signature seals |
 | **Daemon cross-compiles** | builds `starchd` for darwin, linux and windows, and runs the Go suite on Linux |
+| **Linux shell** | vet, the suite under `-race`, both Linux architectures, and that the two binaries install where each other expects |
 
-The last one exists because the README claims the Go layer is ready for
-Windows and Linux shells. An unchecked claim like that rots in a week.
+The last two exist because the README claims the Go layer is ready for other
+platforms, and now that one of them is half-built the claim is testable.
+An unchecked claim like that rots in a week.
+
+The Linux job installs `dbus` before running the suite. The Secret Service
+tests skip themselves when no session bus is present, and a skipped test reads
+as a pass, so the job asserts afterwards that the locked-keyring case actually
+ran. That suite is the only thing in the repository depending on software
+outside it.
 
 The bundle job's checks are the interesting ones — each is a failure that
 otherwise ships silently. A universal build that quietly produced one
