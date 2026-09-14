@@ -118,15 +118,19 @@ struct ProviderTests {
     @Test("raw values match the wire contract")
     func rawValues() {
         #expect(ProviderID.anthropic.rawValue == "anthropic")
+        #expect(ProviderID.openAI.rawValue == "openai")
         #expect(ProviderID.openAICompatible.rawValue == "openai_compatible")
     }
 
     @Test("every provider offers a usable default endpoint and model")
-    func defaults() {
+    func defaults() throws {
         for provider in ProviderID.allCases {
             #expect(!provider.defaultModel.isEmpty)
-            #expect(URL(string: provider.defaultBaseURL) != nil)
-            #expect(provider.defaultBaseURL.hasPrefix("https://"))
+            let url = try #require(URL(string: provider.defaultBaseURL))
+            // Not https everywhere any more: with OpenAI split out, the
+            // compatible category defaults to a local Ollama, and localhost has
+            // no certificate to present.
+            #expect(url.scheme == "https" || url.host == "localhost")
             #expect(!provider.displayName.isEmpty)
         }
     }

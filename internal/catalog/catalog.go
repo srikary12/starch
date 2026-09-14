@@ -113,14 +113,27 @@ type Catalog struct {
 // so a caller that sorts or filters the result cannot corrupt what the next
 // caller sees. It is a few hundred bytes on a settings-window open.
 func Builtin() Catalog {
-	return Catalog{
-		Source: Source,
-		Providers: []Provider{
-			anthropic(),
-			gemini(),
-			openAICompatible(),
-		},
+	providers := []Provider{
+		anthropic(),
+		gemini(),
+		openAI(),
+		openAICompatible(),
 	}
+
+	// Go marshals a nil slice as null, not [], and a shell decoding `models`
+	// into a non-optional array throws on that — taking the whole catalog with
+	// it rather than the one endpoint, which empties every picker in the
+	// window for every provider. Normalised here rather than at each entry, so
+	// that adding an endpoint without models cannot bring it back.
+	for i := range providers {
+		for j := range providers[i].Endpoints {
+			if providers[i].Endpoints[j].Models == nil {
+				providers[i].Endpoints[j].Models = []Model{}
+			}
+		}
+	}
+
+	return Catalog{Source: Source, Providers: providers}
 }
 
 // thinking is a shorthand for the common shape, keeping the tables below
@@ -214,49 +227,62 @@ func gemini() Provider {
 	}
 }
 
+func openAI() Provider {
+	return Provider{
+		ID:   "openai",
+		Name: "OpenAI",
+		// Its own provider rather than one endpoint inside the compatible
+		// category. The models are why: bundled together, the picker offered a
+		// list of GPT models to someone pointing at a local Ollama, and made
+		// someone on OpenAI go looking for it under a protocol name.
+		RequiresKey: true,
+		Endpoints: []Endpoint{{
+			URL:          "https://api.openai.com/v1",
+			Name:         "OpenAI",
+			DefaultModel: "gpt-5.6-luna",
+			Models: []Model{
+				{
+					ID:   "gpt-5.6-luna",
+					Name: "GPT-5.6 Luna",
+					Note: "Cheapest of the 5.6 family.",
+					Thinking: thinking(EffortLow,
+						EffortNone, EffortMinimal, EffortLow, EffortMedium, EffortHigh),
+				},
+				{
+					ID:   "gpt-5.6-terra",
+					Name: "GPT-5.6 Terra",
+					Thinking: thinking(EffortLow,
+						EffortNone, EffortMinimal, EffortLow, EffortMedium, EffortHigh),
+				},
+				{
+					ID:   "gpt-5.6-sol",
+					Name: "GPT-5.6 Sol",
+					Thinking: thinking(EffortLow,
+						EffortNone, EffortMinimal, EffortLow, EffortMedium, EffortHigh),
+				},
+				{
+					ID:   "gpt-6-astra",
+					Name: "GPT-6 Astra",
+					Note: "Most capable, and the most expensive.",
+					// No "none": GPT-6 Astra returns 400 for it.
+					Thinking: thinking(EffortLow,
+						EffortMinimal, EffortLow, EffortMedium, EffortHigh),
+				},
+			},
+		}},
+	}
+}
+
 func openAICompatible() Provider {
 	return Provider{
 		ID:   "openai_compatible",
 		Name: "OpenAI-compatible",
-		// False because the local endpoints below are a complete configuration
-		// with no key at all. The hosted ones do need one, and say so when the
-		// endpoint rejects the request.
+		// Everything else that speaks the same protocol, now that OpenAI has
+		// its own entry. False because the local endpoints here are a complete
+		// configuration with no key at all; the gateways do need one, and say
+		// so when they reject the request.
 		RequiresKey: false,
 		Endpoints: []Endpoint{
-			{
-				URL:          "https://api.openai.com/v1",
-				Name:         "OpenAI",
-				DefaultModel: "gpt-5.6-luna",
-				Models: []Model{
-					{
-						ID:   "gpt-5.6-luna",
-						Name: "GPT-5.6 Luna",
-						Note: "Cheapest of the 5.6 family.",
-						Thinking: thinking(EffortLow,
-							EffortNone, EffortMinimal, EffortLow, EffortMedium, EffortHigh),
-					},
-					{
-						ID:   "gpt-5.6-terra",
-						Name: "GPT-5.6 Terra",
-						Thinking: thinking(EffortLow,
-							EffortNone, EffortMinimal, EffortLow, EffortMedium, EffortHigh),
-					},
-					{
-						ID:   "gpt-5.6-sol",
-						Name: "GPT-5.6 Sol",
-						Thinking: thinking(EffortLow,
-							EffortNone, EffortMinimal, EffortLow, EffortMedium, EffortHigh),
-					},
-					{
-						ID:   "gpt-6-astra",
-						Name: "GPT-6 Astra",
-						Note: "Most capable, and the most expensive.",
-						// No "none": GPT-6 Astra returns 400 for it.
-						Thinking: thinking(EffortLow,
-							EffortMinimal, EffortLow, EffortMedium, EffortHigh),
-					},
-				},
-			},
 			{
 				URL:  "http://localhost:11434/v1",
 				Name: "Ollama (local)",

@@ -152,4 +152,37 @@ struct CatalogTests {
         #expect(empty.models(provider: .gemini, baseURL: "https://example.com").isEmpty)
         #expect(empty.thinking(provider: .gemini, baseURL: "https://example.com", model: "m") == nil)
     }
+
+    /// The regression that emptied every picker in the window.
+    ///
+    /// Go marshals a nil slice as null, so an endpoint whose models cannot be
+    /// known ahead of time arrived as `"models": null`. Because the catalog
+    /// decodes as a single unit, that one null took the entire table down with
+    /// it — not just its own endpoint — so Anthropic and Gemini went empty too.
+    /// The fixture above could never catch it: it was written with `[]`, the
+    /// shape intended rather than the shape the daemon emitted.
+    @Test("a null models array does not take the whole catalog with it")
+    func nullModelsDoesNotBreakEverything() throws {
+        let json = """
+        {"source": "builtin", "providers": [
+          {"id": "anthropic", "name": "Anthropic", "requires_key": true, "endpoints": [
+            {"url": "https://api.anthropic.com", "name": "Anthropic",
+             "models": [{"id": "claude-sonnet-5", "name": "Claude Sonnet 5"}]}]},
+          {"id": "openai_compatible", "name": "OpenAI-compatible", "requires_key": false, "endpoints": [
+            {"url": "http://localhost:11434/v1", "name": "Ollama (local)", "models": null},
+            {"url": "http://localhost:1234/v1", "name": "LM Studio (local)"}]}
+        ]}
+        """
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let catalog = try decoder.decode(ModelCatalog.self, from: Data(json.utf8))
+
+        // The unrelated provider's models are the real assertion: those are
+        // what went missing, and why the symptom was "every model is empty".
+        #expect(catalog.models(provider: .anthropic, baseURL: "https://api.anthropic.com").count == 1)
+
+        // An explicit null and an absent key both mean "none", not a failure.
+        #expect(catalog.models(provider: .openAICompatible, baseURL: "http://localhost:11434/v1").isEmpty)
+        #expect(catalog.models(provider: .openAICompatible, baseURL: "http://localhost:1234/v1").isEmpty)
+    }
 }

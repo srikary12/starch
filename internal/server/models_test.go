@@ -42,6 +42,7 @@ func TestGetModelsNeedsNoSession(t *testing.T) {
 func TestEveryCatalogProviderIsOneSessionAccepts(t *testing.T) {
 	accepted := map[ProviderID]bool{
 		ProviderAnthropic:        true,
+		ProviderOpenAI:           true,
 		ProviderGemini:           true,
 		ProviderOpenAICompatible: true,
 	}
