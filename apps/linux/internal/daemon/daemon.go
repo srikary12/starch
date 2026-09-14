@@ -161,6 +161,30 @@ func (s *Supervisor) Status() Status {
 	return s.status
 }
 
+// WaitHealthy blocks until the daemon answers a heartbeat, or ctx is done.
+//
+// On timeout it reports the daemon's own last complaint rather than "deadline
+// exceeded", because "another daemon is already listening" is actionable and
+// a timeout is not.
+func (s *Supervisor) WaitHealthy(ctx context.Context) error {
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if s.Status().Healthy() {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			if detail := s.Status().Detail; detail != "" {
+				return errors.New(detail)
+			}
+			return fmt.Errorf("%s did not start: %w", brand.Daemon, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 // Run supervises the daemon until ctx is cancelled, then terminates it and
 // waits for it to unlink its socket. It only returns an error if the daemon
 // could never be started at all.
