@@ -306,7 +306,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
     func update(catalog: ModelCatalog) {
         guard catalog != self.catalog else { return }
         self.catalog = catalog
-        refreshSuggestions()
+        // Suggestions only. Whatever is half-typed in a field is the user's.
+        refreshSuggestions(replacingText: false)
     }
 
     /// Repopulates both lists and the Thinking row from the catalog.
@@ -314,14 +315,27 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
     /// It deliberately never overwrites what is in the fields. Someone halfway
     /// through typing a model name this build has never heard of is exactly
     /// the case a curated list has to keep working.
-    private func refreshSuggestions() {
+    /// `replacingText` separates the two reasons this runs.
+    ///
+    /// A settings change is authoritative: the values just changed because the
+    /// user changed them, so the fields must show the new ones even if one of
+    /// them holds the keyboard focus. The catalog arriving is not: only the
+    /// suggestions changed, and it can land mid-word, so what is typed stands.
+    ///
+    /// Conflating the two is what broke switching provider. An editable
+    /// NSComboBox holds a field editor for as long as it has focus, and the
+    /// endpoint box can have it the moment the window opens — so the guard
+    /// meant for a mid-word catalog update silently skipped every deliberate
+    /// update too, and the endpoint never visibly changed.
+    private func refreshSuggestions(replacingText: Bool = true) {
         let provider = catalog.provider(preferences.provider)
 
         present(
             suggestions: provider?.endpoints.map(\.url) ?? [],
             value: preferences.baseURL,
             in: baseURLBox,
-            or: baseURLField
+            or: baseURLField,
+            replacingText: replacingText
         )
 
         let models = catalog.models(provider: preferences.provider, baseURL: preferences.baseURL)
@@ -329,7 +343,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
             suggestions: models.map(\.id),
             value: preferences.model,
             in: modelBox,
-            or: modelField
+            or: modelField,
+            replacingText: replacingText
         )
 
         refreshSourceNote(provider: provider, models: models)
@@ -349,7 +364,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
         suggestions: [String],
         value: String,
         in box: NSComboBox,
-        or field: NSTextField
+        or field: NSTextField,
+        replacingText: Bool
     ) {
         box.removeAllItems()
         box.addItems(withObjectValues: suggestions)
@@ -358,10 +374,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
         box.isHidden = !offering
         field.isHidden = offering
 
-        // Both are kept in step so a swap never reveals a stale value — but
-        // never the one being typed into. The catalog can arrive mid-word, and
-        // overwriting the field under the cursor would lose what was typed.
-        for control in [box, field] where control.currentEditor() == nil {
+        // Both are kept in step so a swap never reveals a stale value. A field
+        // being typed into is spared only when this is the catalog arriving;
+        // a setting the user just changed outranks the text sitting in a box
+        // they have already moved on from.
+        for control in [box, field] where replacingText || control.currentEditor() == nil {
             if control.stringValue != value { control.stringValue = value }
         }
     }
@@ -457,19 +474,18 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
               let provider = ProviderID(rawValue: raw), provider != preferences.provider
         else { return }
 
-        // Carry the defaults across only when the user has not customised the
-        // old ones, so switching providers does not silently discard a
-        // hand-typed endpoint. Both the catalog's answer and the compiled-in
-        // fallback count as untouched: a setting saved before the catalog
-        // existed is still not a customisation.
-        let wasDefaultModel = preferences.model == preferences.provider.defaultModel
-            || preferences.model == defaultModel(for: preferences.provider, baseURL: preferences.baseURL)
-        let wasDefaultURL = preferences.baseURL == preferences.provider.defaultBaseURL
-            || preferences.baseURL == defaultBaseURL(for: preferences.provider)
-
         preferences.provider = provider
-        if wasDefaultURL { preferences.baseURL = defaultBaseURL(for: provider) }
-        if wasDefaultModel { preferences.model = defaultModel(for: provider, baseURL: preferences.baseURL) }
+        // Always the new provider's own endpoint and model. The previous rule
+        // kept a URL that did not look like a default, meaning to protect a
+        // hand-typed gateway — but an endpoint only means anything to the
+        // provider it belongs to, so it also carried api.openai.com across to
+        // Anthropic and produced a configuration that cannot work. Re-typing a
+        // custom gateway after flipping provider and back is the cheaper of
+        // the two mistakes, and the visible behaviour now matches the obvious
+        // expectation: choosing a provider changes the endpoint.
+        let adopted = catalog.defaults(for: provider)
+        preferences.baseURL = adopted.baseURL
+        preferences.model = adopted.model
         // The old provider's level means nothing to the new one — Gemini has
         // no "xhigh" and Anthropic no "minimal" — and sending one it does not
         // know is a rejected request. refreshEffort() puts the new model's
@@ -478,16 +494,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSCo
 
         refresh()
         commit()
-    }
-
-    /// The endpoint to start a provider from: the catalog's first, falling
-    /// back to the compiled-in one for when the daemon has not answered yet.
-    private func defaultBaseURL(for provider: ProviderID) -> String {
-        catalog.provider(provider)?.endpoints.first?.url ?? provider.defaultBaseURL
-    }
-
-    private func defaultModel(for provider: ProviderID, baseURL: String) -> String {
-        catalog.provider(provider)?.endpoint(url: baseURL)?.defaultModel ?? provider.defaultModel
     }
 
     /// A list selection. `stringValue` is not yet updated when this fires, so

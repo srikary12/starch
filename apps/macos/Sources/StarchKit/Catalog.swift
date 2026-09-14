@@ -170,6 +170,23 @@ public struct ModelCatalog: Sendable, Equatable, Decodable {
         self.provider(provider)?.endpoint(url: baseURL)?.models ?? []
     }
 
+    /// The endpoint and model to adopt when the user picks a provider.
+    ///
+    /// Always the chosen provider's own, never what was configured for the
+    /// previous one. An endpoint means nothing outside the provider it belongs
+    /// to: carrying `api.openai.com` across to Anthropic produces a
+    /// configuration that cannot work, however deliberately it was typed.
+    ///
+    /// Falls back to the compiled-in defaults so this is usable in the seconds
+    /// before the daemon has answered, when the catalog is still empty.
+    public func defaults(for provider: ProviderID) -> (baseURL: String, model: String) {
+        let endpoint = self.provider(provider)?.endpoints.first
+        return (
+            baseURL: endpoint?.url ?? provider.defaultBaseURL,
+            model: endpoint?.defaultModel ?? provider.defaultModel
+        )
+    }
+
     /// The thinking controls for one selection, or nil if there are none.
     ///
     /// Falls back to any endpoint of the same provider that serves the model,

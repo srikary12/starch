@@ -185,4 +185,41 @@ struct CatalogTests {
         #expect(catalog.models(provider: .openAICompatible, baseURL: "http://localhost:11434/v1").isEmpty)
         #expect(catalog.models(provider: .openAICompatible, baseURL: "http://localhost:1234/v1").isEmpty)
     }
+
+    /// Choosing a provider must move the endpoint and the model to that
+    /// provider's own. The rule this replaced kept any URL that did not look
+    /// like a default — meaning to protect a hand-typed gateway, but in
+    /// practice carrying one provider's endpoint into another, where it cannot
+    /// work. It was invisible from the window: the setting changed and the
+    /// field did not.
+    @Test("picking a provider adopts that provider's endpoint and model")
+    func providerDefaults() throws {
+        let catalog = try self.catalog()
+
+        let anthropic = catalog.defaults(for: .anthropic)
+        #expect(anthropic.baseURL == "https://api.anthropic.com")
+        #expect(anthropic.model == "claude-sonnet-5")
+
+        let compatible = catalog.defaults(for: .openAICompatible)
+        #expect(compatible.baseURL == "http://localhost:11434/v1")
+        // Nothing in the catalog can say what a local server holds, so this
+        // falls through to the compiled-in guess rather than to another
+        // endpoint's model.
+        #expect(compatible.model == ProviderID.openAICompatible.defaultModel)
+
+        // Neither ever borrows from the other, which is the whole point.
+        #expect(anthropic.baseURL != compatible.baseURL)
+    }
+
+    /// The window calls this before the daemon has answered, on every launch.
+    @Test("an empty catalog still yields a usable endpoint and model")
+    func defaultsWithoutTheDaemon() {
+        for provider in ProviderID.allCases {
+            let defaults = ModelCatalog.empty.defaults(for: provider)
+            #expect(defaults.baseURL == provider.defaultBaseURL)
+            #expect(defaults.model == provider.defaultModel)
+            #expect(!defaults.baseURL.isEmpty)
+            #expect(!defaults.model.isEmpty)
+        }
+    }
 }
