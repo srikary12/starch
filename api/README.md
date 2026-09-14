@@ -19,11 +19,28 @@ loopback port is reachable by every process on the machine.
 
 | | |
 |---|---|
-| Socket path | `$SOCKET` (see [§5](#5-process-contract)), default `~/Library/Application Support/Starch/starchd.sock` on macOS |
+| Socket path | `$SOCKET` (see [§5](#5-process-contract)); the default is per-platform, below |
 | Socket mode | `0600`, inside a `0700` directory |
 | HTTP version | 1.1, keep-alive expected |
 | `Host` header | Ignored. Send anything; `starchd` is conventional. |
 | Encoding | UTF-8 throughout. Request and response bodies are JSON unless stated otherwise. |
+
+### Default socket path
+
+A shell is expected to pass `STARCH_SOCKET` explicitly. These are what
+`starchd` uses when run by hand.
+
+| Platform | Default |
+|---|---|
+| macOS | `~/Library/Application Support/Starch/starchd.sock` |
+| Linux | `$XDG_RUNTIME_DIR/starch/starchd.sock`, falling back to `~/.config/starch/starchd.sock` when that variable is unset |
+
+The socket and the user's `presets.json` are in the same directory on macOS and
+different ones on Linux, which is not an inconsistency: `$XDG_RUNTIME_DIR` is a
+`0700` tmpfs the session manager wipes at logout, which is the right lifetime
+for a handshake socket and the wrong one for something the user wrote. A socket
+left in a config directory instead survives reboots, gets picked up by a
+dotfile manager, and on a network home directory cannot be bound at all.
 
 ### Path length
 
@@ -334,7 +351,7 @@ product does not have.
 | Variable | Required | Meaning |
 |---|---|---|
 | `STARCH_TOKEN` | **yes** | Handshake token. The daemon exits non-zero at startup if unset. |
-| `STARCH_SOCKET` | no | Socket path. Defaults to the per-user application-support directory. |
+| `STARCH_SOCKET` | no | Socket path. Defaults as in [§1](#default-socket-path). |
 | `STARCH_IDLE_TIMEOUT` | no | Go duration. Default `30s`. `0` disables idle exit. |
 | `STARCH_DEBUG` | no | Verbose timing logs on stderr. |
 

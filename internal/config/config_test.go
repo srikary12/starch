@@ -2,7 +2,6 @@ package config
 
 import (
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -135,19 +134,5 @@ func TestMissingTokenIsErrNoToken(t *testing.T) {
 	_, err := Load()
 	if !errors.Is(err, ErrNoToken) {
 		t.Fatalf("Load error = %v, want ErrNoToken", err)
-	}
-}
-
-func TestDefaultSocketPathLivesUnderSupportDir(t *testing.T) {
-	dir, err := SupportDir()
-	if err != nil {
-		t.Fatalf("SupportDir: %v", err)
-	}
-	path, err := DefaultSocketPath()
-	if err != nil {
-		t.Fatalf("DefaultSocketPath: %v", err)
-	}
-	if filepath.Dir(path) != dir {
-		t.Errorf("socket dir = %q, want %q", filepath.Dir(path), dir)
 	}
 }
