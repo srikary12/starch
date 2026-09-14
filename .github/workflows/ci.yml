@@ -92,6 +92,61 @@ jobs:
           # Signed inside out, and the seal intact.
           codesign --verify --strict --verbose=2 "$APP"
 
+  linux-shell:
+    name: Linux shell
+    # The only place this is built and run. It is developed on a Mac, where it
+    # compiles and its tests pass, but "compiles on a Mac" is not the claim —
+    # the claim is that it works on Linux, and this is what checks it.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: A session bus for the keyring tests
+        # Without dbus-daemon the Secret Service tests skip themselves rather
+        # than fail, which would quietly leave the keyring untested. Installing
+        # it is how the skip stays a real signal.
+        run: |
+          set -euo pipefail
+          command -v dbus-daemon || sudo apt-get install -y --no-install-recommends dbus
+          dbus-daemon --version | head -1
+
+      - run: make -C apps/linux vet
+
+      - name: Tests, with the race detector
+        run: make -C apps/linux test
+
+      - name: The keyring tests really ran
+        # A skipped test reads as a pass. This is the one suite that depends on
+        # something outside the repository, so it is worth asserting.
+        run: |
+          set -euo pipefail
+          cd apps/linux
+          go test -count=1 -v -run TestALockedKeyringIsUnlocked ./internal/secret/ | tee /tmp/keyring.log
+          grep -q -- '--- PASS: TestALockedKeyringIsUnlocked' /tmp/keyring.log
+
+      - name: Builds for every Linux target we claim
+        run: |
+          set -euo pipefail
+          cd apps/linux
+          for arch in amd64 arm64; do
+            echo "== linux/$arch"
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -o /dev/null ./cmd/starch
+          done
+
+      - name: The shell and daemon install together
+        # Locate() looks for starchd next to the shell first, so the install
+        # layout is part of the contract between them.
+        run: |
+          set -euo pipefail
+          make linux-install PREFIX="$PWD/staging"
+          test -x staging/bin/starch
+          test -x staging/bin/starchd
+          staging/bin/starch version
+
   portability:
     name: Daemon cross-compiles
     # The Go layer is written assuming Windows and Linux shells are coming.
