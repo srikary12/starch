@@ -8,6 +8,7 @@
 APP_NAME  := Starch
 BUNDLE_ID := dev.starch.Starch
 MACOS_DIR := apps/macos
+LINUX_DIR := apps/linux
 
 BUILD_DIR := build
 DAEMON    := $(BUILD_DIR)/starchd
@@ -29,6 +30,7 @@ GO_LDFLAGS := -s -w -X main.version=$(VERSION)
 .DEFAULT_GOAL := build
 
 .PHONY: help build daemon app run install test test-go test-swift \
+        test-linux-shell linux linux-install \
         fmt vet check clean register-services reset-permissions logs
 
 ## help: list available targets
@@ -66,6 +68,20 @@ app: daemon
 		ARCH="$(ARCH)" \
 		SIGN_IDENTITY="$(SIGN_IDENTITY)"
 
+## linux: build the daemon and the Linux shell (run this on Linux)
+##        The macOS targets above build an app bundle and do not apply here.
+linux: daemon
+	@$(MAKE) -C $(LINUX_DIR) build \
+		OUTDIR="$(CURDIR)/$(BUILD_DIR)" \
+		VERSION="$(VERSION)"
+
+## linux-install: install the Linux shell and daemon into PREFIX/bin
+##                PREFIX defaults to ~/.local, so no root is needed.
+linux-install: daemon
+	@$(MAKE) -C $(LINUX_DIR) install \
+		OUTDIR="$(CURDIR)/$(BUILD_DIR)" \
+		VERSION="$(VERSION)"
+
 ## run: build and launch the app (quits any running copy first)
 run: app
 	@pkill -x $(APP_NAME) 2>/dev/null || true
@@ -82,11 +98,18 @@ install: app
 	@echo "installed /Applications/$(APP_NAME).app"
 
 ## test: run every test suite
-test: test-go test-swift
+test: test-go test-linux-shell test-swift
 
 ## test-go: run the Go tests with the race detector
 test-go:
 	go test -race ./...
+
+## test-linux-shell: run the Linux shell's Go tests
+##                    Its own module, so the root suite does not reach it. It
+##                    builds and runs on macOS too, which is the only reason it
+##                    can be developed here at all.
+test-linux-shell:
+	@$(MAKE) -C $(LINUX_DIR) test
 
 ## test-swift: run the Swift tests
 test-swift:
@@ -95,10 +118,12 @@ test-swift:
 ## fmt: format the Go sources
 fmt:
 	gofmt -w .
+	@$(MAKE) -C $(LINUX_DIR) fmt
 
-## vet: run go vet and check formatting
+## vet: run go vet and check formatting, in both modules
 vet:
 	go vet ./...
+	@$(MAKE) -C $(LINUX_DIR) vet
 	@unformatted=$$(gofmt -l .); \
 	if [ -n "$$unformatted" ]; then \
 		echo "these files need gofmt:"; echo "$$unformatted"; exit 1; \
@@ -133,3 +158,4 @@ logs:
 clean:
 	rm -rf $(BUILD_DIR)
 	@$(MAKE) -C $(MACOS_DIR) clean
+	@$(MAKE) -C $(LINUX_DIR) clean

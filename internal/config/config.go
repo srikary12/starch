@@ -1,18 +1,16 @@
 // Package config resolves the daemon's runtime configuration from the
 // environment the native shell spawns it with.
 //
-// Nothing here is macOS-specific: os.UserConfigDir resolves to
-// ~/Library/Application Support on darwin, ~/.config on Linux and %AppData%
-// on Windows, which is the right per-user location on each. If a platform
-// ever needs something else, the shell can override every path with an
-// environment variable rather than the daemon growing a build tag.
+// Nothing here is tied to one platform. Where the daemon's files belong does
+// differ per platform, and paths.go answers that in one place; a shell that
+// disagrees can override every path with an environment variable rather than
+// the daemon growing a build tag.
 package config
 
 import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -52,25 +50,6 @@ type Config struct {
 
 // ErrNoToken reports that the required handshake token was not supplied.
 var ErrNoToken = errors.New("no handshake token: " + EnvToken + " must be set by the parent process")
-
-// SupportDir returns the per-user directory holding the socket and presets.
-func SupportDir() (string, error) {
-	base, err := os.UserConfigDir()
-	if err != nil {
-		return "", fmt.Errorf("locating user config dir: %w", err)
-	}
-	return filepath.Join(base, brand.SupportDirName), nil
-}
-
-// DefaultSocketPath returns the socket path used when the shell does not
-// override it.
-func DefaultSocketPath() (string, error) {
-	dir, err := SupportDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, brand.SocketName), nil
-}
 
 // Load resolves configuration from the process environment.
 func Load() (Config, error) {

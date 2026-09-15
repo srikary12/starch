@@ -69,8 +69,9 @@ thin native shell.
 `starchd` is a local daemon on your machine, not a service anyone operates. The
 shell spawns it at login, supervises it, and makes sure it dies with the app.
 
-Future Windows and Linux shells speak the same wire contract; only the top box
-gets rewritten.
+A second shell is being written for Linux, in Go, and it is the test of that
+claim: it reuses the same daemon unchanged, over the same socket, and the only
+thing it had to add was the OS-specific half. Windows would be a third.
 
 The split also pays for itself on latency. A long-lived daemon keeps a warm
 HTTP client with keep-alive to your provider, so every rewrite after the first
@@ -98,6 +99,32 @@ That builds the daemon and the app, puts it in `/Applications`, and registers
 the right-click **Starch** entry — which macOS only discovers from there. The
 app is a menu bar utility with no Dock icon, so look in the status bar, not the
 Dock. Open **Settings…** from its menu and add your API key.
+
+### Linux
+
+**In progress, and not yet driven from the desktop.** What exists today is the
+rewrite loop without the desktop integration: a Go shell that spawns the same
+`starchd`, keeps your key in the Secret Service, and rewrites text from the
+terminal. The hot key, the overlay and replacing text in place are the next
+piece of work; until they land, the macOS app is the only place Starch does the
+thing it exists for.
+
+```sh
+make linux-install                  # ~/.local/bin, no root needed
+starch config --list                # the providers, endpoints and models
+starch config --provider anthropic
+starch config --key                 # read from the terminal, stored in your keyring
+echo "thx for the update, appreciate it" | starch rewrite
+```
+
+Needs Go 1.23+ and a keyring providing `org.freedesktop.secrets` — GNOME
+Keyring, KWallet and KeePassXC all do. No GTK, no Qt, no development headers:
+the shell is pure Go and builds with `CGO_ENABLED=0` exactly as the daemon
+does, so cross-compiling it is a one-liner too.
+
+The desktop half is being written for **X11 first**. That is a deliberate
+narrowing rather than an oversight, and [CONTRIBUTING.md](CONTRIBUTING.md#the-linux-shell-targets-x11-first)
+records what Wayland costs and why it is its own decision.
 
 ### Why there is no DMG or Homebrew cask
 
@@ -196,10 +223,11 @@ service its own keyboard shortcut on that same screen.
 | **M3** | Presets, including a neutral-business-English one | ✅ done |
 | **M4** | CI on every push, and tagged source releases | ✅ done |
 | **M5** | Model and endpoint pickers, and a thinking-effort control | ✅ done |
+| **M6** | A Linux shell: the rewrite loop first, X11 desktop integration next | 🚧 in progress |
 
 Not in v1: accounts, sync, analytics, auto-update, fine-tuning, or a custom
-keyboard. No Windows or Linux shell yet either, though the Go layer is written
-assuming they are coming.
+keyboard. No Windows shell either, though the Go layer is written assuming one
+is coming, and the Linux shell above is the evidence that it can be.
 
 **Also not in v1: a local voice profile.** It was planned — accepted rewrites
 kept in a local database, the nearest few injected as examples so output drifts
