@@ -114,24 +114,24 @@ jobs:
           command -v dbus-daemon || sudo apt-get install -y --no-install-recommends dbus
           dbus-daemon --version | head -1
 
-      - run: make -C apps/linux vet
+      - run: make -C apps/desktop vet
 
       - name: Tests, with the race detector
-        run: make -C apps/linux test
+        run: make -C apps/desktop test
 
       - name: The keyring tests really ran
         # A skipped test reads as a pass. This is the one suite that depends on
         # something outside the repository, so it is worth asserting.
         run: |
           set -euo pipefail
-          cd apps/linux
+          cd apps/desktop
           go test -count=1 -v -run TestALockedKeyringIsUnlocked ./internal/secret/ | tee /tmp/keyring.log
           grep -q -- '--- PASS: TestALockedKeyringIsUnlocked' /tmp/keyring.log
 
       - name: Builds for every Linux target we claim
         run: |
           set -euo pipefail
-          cd apps/linux
+          cd apps/desktop
           for arch in amd64 arm64; do
             echo "== linux/$arch"
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -o /dev/null ./cmd/starch

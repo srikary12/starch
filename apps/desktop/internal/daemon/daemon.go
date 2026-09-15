@@ -24,7 +24,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/srikary12/starch/apps/linux/internal/client"
+	"github.com/srikary12/starch/apps/desktop/internal/client"
 	"github.com/srikary12/starch/internal/brand"
 )
 

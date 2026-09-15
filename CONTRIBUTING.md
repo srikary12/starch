@@ -35,6 +35,7 @@ make help       # everything else
 
 make linux          # build the daemon and the Linux shell
 make linux-install  # into ~/.local/bin; PREFIX overrides
+make windows        # cross-build starchd.exe and starch.exe, from any host
 ```
 
 ## Layout
@@ -51,17 +52,19 @@ apps/macos/
   Sources/StarchKit/    testable logic: framing, client, lifecycle, settings
   Sources/Starch/       AppKit shell: menu bar, windows, hot key
   Tests/
-apps/linux/             its own Go module — see below
-  cmd/starch/           the shell binary
+apps/desktop/           the Go shells, one module — see below
+  cmd/starch/           the shell binary, one per platform from this entrypoint
   internal/client/      the wire contract, over the Unix socket
   internal/daemon/      spawning and supervising starchd
-  internal/secret/      the API key, in org.freedesktop.secrets
+  internal/secret/      the API key, in the OS secret store
   internal/settings/    preferences, and the hot key spelling
   internal/rewrite/     the session handshake and its one retry
   internal/cli/         `starch config` and `starch rewrite`
+  internal/x11/         Linux: hot key, selection, overlay
+  internal/win32/       Windows: hot key, selection, overlay
 ```
 
-`apps/linux` is a **separate Go module**, the way `apps/macos` is a separate
+`apps/desktop` is a **separate Go module**, the way `apps/macos` is a separate
 Swift package. That is what keeps the root module's dependency list empty:
 `starchd` is the process users run with an API key in memory, and "it depends
 on nothing" is worth being able to say without qualification. A `replace`
@@ -69,6 +72,13 @@ directive lets the shell import `internal/brand`, `internal/config` and
 `internal/catalog` from the daemon rather than restating them — which is why
 its compiled-in provider defaults cannot go stale the way the macOS shell's
 did.
+
+**One module for both Go shells, not one each.** Most of a shell is not
+platform-specific — the client, the supervisor, settings, the session handshake
+and the terminal interface are the same code on Linux and Windows — and Go's
+`internal` rule would stop a sibling module from importing any of it, so the
+alternative is two copies that drift. Only `internal/x11` and `internal/win32`
+are built per platform, behind build tags.
 
 `internal/` must stay OS-independent. Anything macOS-specific that leaks in
 there is a bug — the whole point of the split is that Windows and Linux shells
@@ -290,10 +300,10 @@ bare `EINVAL`. If you write a test that puts a socket in `t.TempDir()`, it will
 intermittently blow the limit — use the short-path helper in
 `internal/server/server_test.go` instead.
 
-### The Linux shell is a second Go module
+### The desktop shells are a second Go module
 
-`go test ./...` at the root does not reach it, and neither does `go vet`. Both
-root targets shell out to `apps/linux` — `make vet` and `make test` cover
+`go test ./...` at the root does not reach them, and neither does `go vet`. Both
+root targets shell out to `apps/desktop` — `make vet` and `make test` cover
 everything, but a bare `go test ./...` quietly covers less than it looks like.
 
 Running `starch rewrite` spawns a daemon of its own, on its own socket named

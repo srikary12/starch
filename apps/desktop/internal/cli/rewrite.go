@@ -8,10 +8,10 @@ import (
 	"io"
 	"strings"
 
-	"github.com/srikary12/starch/apps/linux/internal/client"
-	"github.com/srikary12/starch/apps/linux/internal/rewrite"
-	"github.com/srikary12/starch/apps/linux/internal/secret"
-	"github.com/srikary12/starch/apps/linux/internal/settings"
+	"github.com/srikary12/starch/apps/desktop/internal/client"
+	"github.com/srikary12/starch/apps/desktop/internal/rewrite"
+	"github.com/srikary12/starch/apps/desktop/internal/secret"
+	"github.com/srikary12/starch/apps/desktop/internal/settings"
 	"github.com/srikary12/starch/internal/catalog"
 )
 
