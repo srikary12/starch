@@ -3,11 +3,49 @@ package server
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
+
+// restrictToOwner narrows path to the user the daemon runs as.
+//
+// A POSIX mode does nothing on Windows: syscall.Chmod there only toggles
+// FILE_ATTRIBUTE_READONLY and ignores the mode bits entirely, returning nil
+// either way. Calling os.Chmod and treating a nil as success would mean the
+// daemon reporting that it had secured a socket it had not touched, which is
+// worse than not trying — a false guarantee is not a weaker guarantee.
+//
+// So on Windows this does nothing and says so. Access control there is an ACL
+// on the containing directory, which the shell sets before spawning us; see
+// §5 of api/README.md, where that is a stated obligation rather than an
+// assumption.
+func restrictToOwner(goos, path string, mode fs.FileMode, chmod func(string, fs.FileMode) error) error {
+	if goos == "windows" {
+		return nil
+	}
+	return chmod(path, mode)
+}
+
+// warnIfUnenforced puts the gap above in the daemon's log once per start.
+//
+// The socket is still protected in the normal case — the shell creates that
+// directory with a DACL naming only the current user, and %LocalAppData%
+// inherits a user-only ACL anyway — but starchd run by hand, which is how it
+// gets developed and debugged, has no shell to have done that. Someone reading
+// the log deserves to know which of those they are in.
+func warnIfUnenforced(goos, dir string) {
+	if goos != "windows" {
+		return
+	}
+	slog.Warn("socket directory permissions are the shell's responsibility on this platform",
+		"dir", dir,
+		"detail", "POSIX modes do not apply; the spawning shell sets an ACL naming only the current user")
+}
 
 // maxSocketPathLen is the portable ceiling on sun_path. Darwin allows 104
 // bytes and Linux 108, both including the NUL terminator. Exceeding it makes
@@ -36,9 +74,10 @@ func Listen(path string) (net.Listener, error) {
 	}
 	// MkdirAll is a no-op on an existing directory, including one created with
 	// looser permissions by an older build, so tighten it unconditionally.
-	if err := os.Chmod(dir, 0o700); err != nil {
+	if err := restrictToOwner(runtime.GOOS, dir, 0o700, os.Chmod); err != nil {
 		return nil, fmt.Errorf("securing %s: %w", dir, err)
 	}
+	warnIfUnenforced(runtime.GOOS, dir)
 
 	if err := clearStaleSocket(path); err != nil {
 		return nil, err
@@ -49,7 +88,7 @@ func Listen(path string) (net.Listener, error) {
 		return nil, fmt.Errorf("binding %s: %w", path, err)
 	}
 
-	if err := os.Chmod(path, 0o600); err != nil {
+	if err := restrictToOwner(runtime.GOOS, path, 0o600, os.Chmod); err != nil {
 		ln.Close()
 		return nil, fmt.Errorf("securing %s: %w", path, err)
 	}

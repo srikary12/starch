@@ -20,7 +20,7 @@ loopback port is reachable by every process on the machine.
 | | |
 |---|---|
 | Socket path | `$SOCKET` (see [§5](#5-process-contract)); the default is per-platform, below |
-| Socket mode | `0600`, inside a `0700` directory |
+| Socket mode | `0600`, inside a `0700` directory — on Windows, see [§5](#securing-the-socket-on-windows) |
 | HTTP version | 1.1, keep-alive expected |
 | `Host` header | Ignored. Send anything; `starchd` is conventional. |
 | Encoding | UTF-8 throughout. Request and response bodies are JSON unless stated otherwise. |
@@ -50,10 +50,14 @@ a socket path longer than 103 bytes with a readable error rather than letting
 
 ### Windows
 
-Windows 10 1803+ supports `AF_UNIX`, so the intent is that a Windows shell uses
-the same transport with no contract change. Named pipes are the fallback if
-that turns out not to hold. There is no abstraction layer for this yet and
-none should be added until a second platform actually needs it.
+Windows 10 1803+ supports `AF_UNIX`, and Go's `net` package supports it there —
+`unixsock_posix.go` is built for Windows and gates on a runtime capability
+check. So a Windows shell uses the same transport with no contract change, as
+intended, and named pipes stay unneeded. There is no abstraction layer for this
+and none should be added.
+
+What does *not* carry over is the file mode; see
+[§5](#securing-the-socket-on-windows).
 
 ---
 
@@ -353,6 +357,27 @@ the file and the active set untouched.
 The shell owns the daemon's lifetime. The daemon is spawned at app launch, not
 on first use — cold-starting a process while the user waits spends latency the
 product does not have.
+
+### Securing the socket on Windows
+
+**On Windows the shell, not the daemon, restricts access to the socket.** This
+is an obligation, not a suggestion: a shell that skips it leaves a socket
+carrying an API key reachable by every account on the machine.
+
+POSIX modes do not exist there. Go's `syscall.Chmod` on Windows toggles
+`FILE_ATTRIBUTE_READONLY` and ignores the mode bits, returning success either
+way, so the daemon cannot enforce `0600`/`0700` and deliberately does not
+pretend to — it skips the call and logs a line saying whose job this is.
+
+A Windows shell must therefore, **before spawning the daemon**, create the
+directory named by `STARCH_SOCKET` with an explicit DACL granting access only
+to the SID of the user the daemon will run as, and no inherited ACEs. Placing
+it under `%LocalAppData%` is not sufficient on its own: that directory usually
+inherits a user-only ACL, but "usually inherits" is not something a privacy
+guarantee can rest on.
+
+The macOS and Linux shells need do nothing here — the daemon enforces the mode
+itself, which is why this section names only Windows.
 
 ### Environment
 

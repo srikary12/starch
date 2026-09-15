@@ -37,10 +37,14 @@ being true, that is a bug worth filing.
   and is gone. There is no local database to erase because there is nothing
   kept to put in one.
 - **The local socket is not a network port.** The helper listens on a Unix
-  domain socket with mode `0600` inside a `0700` directory, with a random
-  handshake token generated at spawn. There is no TCP listener on any port,
-  which is deliberate: a loopback port would be reachable by every process on
-  the machine.
+  domain socket restricted to your account, with a random handshake token
+  generated at spawn. There is no TCP listener on any port, which is
+  deliberate: a loopback port would be reachable by every process on the
+  machine. "Restricted to your account" means mode `0600` inside a `0700`
+  directory on macOS and Linux, where the helper enforces it itself; on Windows
+  it means an ACL naming only your user, set by the app before the helper
+  starts, because POSIX modes do not exist there and the helper says so rather
+  than claiming a permission it cannot set.
 
 Everything above is verifiable — the source is right here, and
 [`api/README.md`](api/README.md) documents every byte that crosses the process
