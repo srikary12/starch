@@ -8,7 +8,8 @@
 APP_NAME  := Starch
 BUNDLE_ID := dev.starch.Starch
 MACOS_DIR := apps/macos
-LINUX_DIR := apps/linux
+# One module for every Go desktop shell. Linux today, Windows next.
+DESKTOP_DIR := apps/desktop
 
 BUILD_DIR := build
 DAEMON    := $(BUILD_DIR)/starchd
@@ -30,7 +31,7 @@ GO_LDFLAGS := -s -w -X main.version=$(VERSION)
 .DEFAULT_GOAL := build
 
 .PHONY: help build daemon app run install test test-go test-swift \
-        test-linux-shell linux linux-install \
+        test-desktop linux linux-install windows \
         fmt vet check clean register-services reset-permissions logs
 
 ## help: list available targets
@@ -71,14 +72,24 @@ app: daemon
 ## linux: build the daemon and the Linux shell (run this on Linux)
 ##        The macOS targets above build an app bundle and do not apply here.
 linux: daemon
-	@$(MAKE) -C $(LINUX_DIR) build \
+	@$(MAKE) -C $(DESKTOP_DIR) build \
 		OUTDIR="$(CURDIR)/$(BUILD_DIR)" \
 		VERSION="$(VERSION)"
 
 ## linux-install: install the Linux shell and daemon into PREFIX/bin
 ##                PREFIX defaults to ~/.local, so no root is needed.
 linux-install: daemon
-	@$(MAKE) -C $(LINUX_DIR) install \
+	@$(MAKE) -C $(DESKTOP_DIR) install \
+		OUTDIR="$(CURDIR)/$(BUILD_DIR)" \
+		VERSION="$(VERSION)"
+
+## windows: cross-build the daemon and the Windows shell into build/
+##          Produces starchd.exe and starch.exe. Runs from any host.
+windows:
+	@mkdir -p $(BUILD_DIR)
+	CGO_ENABLED=0 GOOS=windows go build -trimpath -ldflags "$(GO_LDFLAGS)" -o $(BUILD_DIR)/starchd.exe ./cmd/starchd
+	@$(MAKE) -C $(DESKTOP_DIR) build \
+		GOOS=windows \
 		OUTDIR="$(CURDIR)/$(BUILD_DIR)" \
 		VERSION="$(VERSION)"
 
@@ -98,18 +109,18 @@ install: app
 	@echo "installed /Applications/$(APP_NAME).app"
 
 ## test: run every test suite
-test: test-go test-linux-shell test-swift
+test: test-go test-desktop test-swift
 
 ## test-go: run the Go tests with the race detector
 test-go:
 	go test -race ./...
 
-## test-linux-shell: run the Linux shell's Go tests
-##                    Its own module, so the root suite does not reach it. It
-##                    builds and runs on macOS too, which is the only reason it
-##                    can be developed here at all.
-test-linux-shell:
-	@$(MAKE) -C $(LINUX_DIR) test
+## test-desktop: run the Go desktop shells' tests
+##               Their own module, so the root suite does not reach it. The
+##               shared half builds and runs on macOS too, which is the only
+##               reason either shell can be developed here at all.
+test-desktop:
+	@$(MAKE) -C $(DESKTOP_DIR) test
 
 ## test-swift: run the Swift tests
 test-swift:
@@ -118,12 +129,12 @@ test-swift:
 ## fmt: format the Go sources
 fmt:
 	gofmt -w .
-	@$(MAKE) -C $(LINUX_DIR) fmt
+	@$(MAKE) -C $(DESKTOP_DIR) fmt
 
 ## vet: run go vet and check formatting, in both modules
 vet:
 	go vet ./...
-	@$(MAKE) -C $(LINUX_DIR) vet
+	@$(MAKE) -C $(DESKTOP_DIR) vet
 	@unformatted=$$(gofmt -l .); \
 	if [ -n "$$unformatted" ]; then \
 		echo "these files need gofmt:"; echo "$$unformatted"; exit 1; \
@@ -158,4 +169,4 @@ logs:
 clean:
 	rm -rf $(BUILD_DIR)
 	@$(MAKE) -C $(MACOS_DIR) clean
-	@$(MAKE) -C $(LINUX_DIR) clean
+	@$(MAKE) -C $(DESKTOP_DIR) clean

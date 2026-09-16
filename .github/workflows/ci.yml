@@ -114,24 +114,24 @@ jobs:
           command -v dbus-daemon || sudo apt-get install -y --no-install-recommends dbus
           dbus-daemon --version | head -1
 
-      - run: make -C apps/linux vet
+      - run: make -C apps/desktop vet
 
       - name: Tests, with the race detector
-        run: make -C apps/linux test
+        run: make -C apps/desktop test
 
       - name: The keyring tests really ran
         # A skipped test reads as a pass. This is the one suite that depends on
         # something outside the repository, so it is worth asserting.
         run: |
           set -euo pipefail
-          cd apps/linux
+          cd apps/desktop
           go test -count=1 -v -run TestALockedKeyringIsUnlocked ./internal/secret/ | tee /tmp/keyring.log
           grep -q -- '--- PASS: TestALockedKeyringIsUnlocked' /tmp/keyring.log
 
       - name: Builds for every Linux target we claim
         run: |
           set -euo pipefail
-          cd apps/linux
+          cd apps/desktop
           for arch in amd64 arm64; do
             echo "== linux/$arch"
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -trimpath -o /dev/null ./cmd/starch
@@ -146,6 +146,135 @@ jobs:
           test -x staging/bin/starch
           test -x staging/bin/starchd
           staging/bin/starch version
+
+  windows-shell:
+    name: Windows shell
+    # The only place any of the Windows code runs. It is written on a Mac,
+    # where it cross-compiles and type-checks but cannot execute a single
+    # syscall of what it is actually made of, so "it compiles" is not the claim
+    # being tested here.
+    runs-on: windows-latest
+    defaults:
+      run:
+        # Git for Windows ships bash, and using it keeps these steps readable
+        # and close to the Linux job's. make is not on the image.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Vet and format
+        run: |
+          set -euo pipefail
+          go vet ./...
+          (cd apps/desktop && go vet ./...)
+          # gofmt walks directories, not modules, so "." already covers
+          # apps/desktop — naming it again would list every file twice.
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files need gofmt:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: The daemon's own suite, on Windows
+        # First time this has run here. The socket code is the interesting
+        # part: AF_UNIX works, and a stale socket file is now the common case
+        # rather than an edge one, because there is no graceful stop to send on
+        # this platform so the daemon never gets to unlink its own.
+        run: go test ./...
+
+      - name: The shell's suite
+        # No -race: it requires cgo everywhere except macOS, and the whole
+        # point of this shell is that it needs no C toolchain. The shared
+        # packages are raced in the macOS and Linux jobs, which is where the
+        # concurrency actually lives.
+        run: cd apps/desktop && go test ./...
+
+      - name: Credential Manager and the job object really ran
+        # Both talk to the real OS — there is no service to fake — so they are
+        # the two suites that only exist here. A silently skipped test reads as
+        # a pass, so assert they did not skip.
+        run: |
+          set -euo pipefail
+          cd apps/desktop
+          go test -count=1 -v ./internal/secret/ ./internal/win32/ | tee /tmp/windows.log
+          grep -q -- '--- PASS: TestSetGetDelete' /tmp/windows.log
+          grep -q -- '--- PASS: TestEnsureOwnerOnlyDirNamesOnlyThisUser' /tmp/windows.log
+          # Not TestEnsureOwnerOnlyDirTightensWhatItFinds: it skips itself when
+          # the runner's temp directory already blocks inheritance, which is a
+          # legitimate outcome rather than a silent hole. TestBothPathsNameOneTrustee
+          # covers the same path and cannot skip.
+          grep -q -- '--- PASS: TestBothPathsNameOneTrustee' /tmp/windows.log
+          grep -q -- '--- PASS: TestConfineToShellLifetime' /tmp/windows.log
+
+      - name: Builds for every Windows target we claim
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            echo "== windows/$arch"
+            CGO_ENABLED=0 GOOS=windows GOARCH="$arch" go build -trimpath -o /dev/null ./cmd/starchd
+            (cd apps/desktop && CGO_ENABLED=0 GOOS=windows GOARCH="$arch" go build -trimpath -o /dev/null ./cmd/starch)
+          done
+
+      - name: The whole loop, without a desktop
+        # This is the step worth having. It exercises the parts that only exist
+        # on Windows and that no unit test reaches: the socket directory's
+        # access list, the job object, spawning and supervising starchd over
+        # AF_UNIX, and a streamed rewrite end to end. The provider is a stub, so
+        # nothing leaves the runner and no key is needed.
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          CGO_ENABLED=0 go build -o build/starchd.exe ./cmd/starchd
+          (cd apps/desktop && CGO_ENABLED=0 go build -o ../../build/starch.exe ./cmd/starch)
+
+          cat > provider.py <<'PY'
+          import http.server, json, socketserver, sys
+          class H(http.server.BaseHTTPRequestHandler):
+              def do_POST(self):
+                  self.rfile.read(int(self.headers['Content-Length']))
+                  self.send_response(200)
+                  self.send_header('Content-Type', 'text/event-stream')
+                  self.end_headers()
+                  for piece in ["Thanks ", "for the ", "update."]:
+                      self.wfile.write(b"data: " + json.dumps(
+                          {"choices": [{"delta": {"content": piece}}]}).encode() + b"\n\n")
+                      self.wfile.flush()
+                  self.wfile.write(b"data: [DONE]\n\n")
+                  self.wfile.flush()
+              def log_message(self, *a): pass
+          srv = socketserver.TCPServer(("127.0.0.1", 0), H)
+          print(srv.server_address[1], flush=True)
+          srv.serve_forever()
+          PY
+
+          python provider.py > port.txt &
+          for _ in $(seq 1 30); do [ -s port.txt ] && break; sleep 1; done
+          PORT=$(cat port.txt)
+          echo "stub provider on 127.0.0.1:$PORT"
+
+          export STARCH_DAEMON="$PWD/build/starchd.exe"
+          ./build/starch.exe config \
+            --provider openai_compatible \
+            --endpoint "http://127.0.0.1:$PORT/v1" \
+            --model smoke-test-model
+
+          printf 'thx for the update' | ./build/starch.exe rewrite | tee rewrite.txt
+          grep -q 'Thanks for the update.' rewrite.txt
+
+      - name: Nothing was left holding a key
+        # The daemon must not outlive the command that spawned it. On Windows
+        # that guarantee comes from the job object rather than from a signal or
+        # from reparenting, neither of which exists here.
+        run: |
+          set -euo pipefail
+          sleep 2
+          if tasklist | grep -i starchd; then
+            echo "a daemon outlived its shell"; exit 1
+          fi
+          echo "no starchd running"
 
   portability:
     name: Daemon cross-compiles

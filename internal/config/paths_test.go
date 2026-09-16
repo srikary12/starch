@@ -57,10 +57,39 @@ func TestRuntimeDir(t *testing.T) {
 			want: configRoot + "/" + brand.SupportDirName,
 		},
 		{
-			name: "windows keeps everything in the config dir",
+			// %AppData% roams. A socket synced to a file server and restored at
+			// next logon is a stale rendezvous the daemon has to clear.
+			name: "windows puts the socket in the local app data dir",
+			goos: "windows",
+			env:  map[string]string{"LOCALAPPDATA": `C:\Users\me\AppData\Local`},
+			want: `C:\Users\me\AppData\Local` + "/" + brand.SupportDirName,
+		},
+		{
+			name: "windows accepts a UNC local app data dir",
+			goos: "windows",
+			env:  map[string]string{"LOCALAPPDATA": `\\fileserver\profiles\me\Local`},
+			want: `\\fileserver\profiles\me\Local` + "/" + brand.SupportDirName,
+		},
+		{
+			name: "windows falls back to the config dir when it is unset",
 			goos: "windows",
 			env:  nil,
 			want: configRoot + "/" + brand.SupportDirName,
+		},
+		{
+			// "C:foo" is relative to that drive's current directory, not a root.
+			name: "windows refuses a drive-relative local app data dir",
+			goos: "windows",
+			env:  map[string]string{"LOCALAPPDATA": `C:Users\me`},
+			want: configRoot + "/" + brand.SupportDirName,
+		},
+		{
+			// LOCALAPPDATA is sometimes exported inside a Unix shell by tooling
+			// that emulates Windows, and following it there would be wrong.
+			name: "linux ignores the local app data dir",
+			goos: "linux",
+			env:  map[string]string{"LOCALAPPDATA": `C:\Users\me\AppData\Local`},
+			want: configRoot + "/starch",
 		},
 	}
 
@@ -137,5 +166,36 @@ func TestDefaultSocketPathLivesInTheRuntimeDir(t *testing.T) {
 	}
 	if filepath.Base(path) != brand.SocketName {
 		t.Errorf("socket name = %q, want %q", filepath.Base(path), brand.SocketName)
+	}
+}
+
+// filepath.IsAbs answers for the host, so it would call every Windows path
+// relative on a Mac and make that branch untestable here. This is the
+// replacement, and it is worth its own table because getting it wrong means
+// the socket quietly lands somewhere relative to the working directory.
+func TestIsAbs(t *testing.T) {
+	tests := []struct {
+		goos, path string
+		want       bool
+	}{
+		{"windows", `C:\Users\me`, true},
+		{"windows", `c:/Users/me`, true},
+		{"windows", `\\fileserver\share`, true},
+		{"windows", `C:Users\me`, false}, // relative to that drive's cwd
+		{"windows", `Users\me`, false},
+		{"windows", `C:`, false},
+		{"windows", ``, false},
+		{"windows", `/Users/me`, false}, // rooted on the current drive, not absolute
+		{"linux", "/run/user/1000", true},
+		{"linux", "run/user/1000", false},
+		{"linux", "", false},
+		{"linux", `C:\Users\me`, false},
+		{"darwin", "/Users/me", true},
+	}
+
+	for _, tc := range tests {
+		if got := isAbs(tc.goos, tc.path); got != tc.want {
+			t.Errorf("isAbs(%q, %q) = %v, want %v", tc.goos, tc.path, got, tc.want)
+		}
 	}
 }
