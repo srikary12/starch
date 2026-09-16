@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -90,6 +91,9 @@ type UIThread struct {
 	mu      sync.Mutex
 	hotkeys map[int32]func()
 	nextID  int32
+	// pending is the rewrite advertised on the clipboard but not yet handed
+	// over. See paste_windows.go.
+	pending *pendingPaste
 
 	// ready closes once hwnd is usable, so Post from another goroutine cannot
 	// race the window into existence.
@@ -232,14 +236,52 @@ func (u *UIThread) createWindow() error {
 		return fmt.Errorf("creating the message window: %w", err)
 	}
 	u.hwnd = hwnd
+	active.Store(u)
 	return nil
 }
 
+// active is the process's one UI thread.
+//
+// A package-level pointer because a window procedure is a bare C callback with
+// nowhere to hang a receiver, and the alternative — stashing the pointer in the
+// window's user data and reading it back through GetWindowLongPtr — buys
+// nothing here. There is exactly one UI thread by design: Win32 ties windows to
+// the thread that made them, so a second one would be a second set of windows
+// nothing could talk to.
+var active atomic.Pointer[UIThread]
+
 func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
-	if message == wmDestroy {
+	switch message {
+	case wmDestroy:
 		procPostQuitMessage.Call(0)
 		return 0
+
+	case wmRenderFormat:
+		// An application is pasting and has asked for the data we advertised.
+		if u := active.Load(); u != nil {
+			u.render(uint32(wParam))
+		}
+		return 0
+
+	case wmRenderAllFormats:
+		// The clipboard is being handed on while we still owe it data, which
+		// happens when this process is closing. Render so the user's paste is
+		// not lost.
+		if u := active.Load(); u != nil {
+			u.render(cfUnicodeText)
+		}
+		return 0
+
+	case wmDestroyClipboard:
+		// Someone else took ownership before pasting ours. Whatever was waiting
+		// is never going to be rendered, so release it rather than let it sit
+		// out the full timeout.
+		if u := active.Load(); u != nil {
+			u.clearPending()
+		}
+		return 0
 	}
+
 	result, _, _ := procDefWindowProc.Call(hwnd, uintptr(message), wParam, lParam)
 	return result
 }
