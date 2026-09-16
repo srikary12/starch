@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -23,7 +24,10 @@ import (
 // channel instead: TestMain re-executes this binary as a stand-in daemon when
 // it is invoked under a "fake-" name, and each name is a different behaviour.
 func TestMain(m *testing.M) {
-	switch filepath.Base(os.Args[0]) {
+	// Trimmed because Windows will not execute a file without one of the
+	// extensions in %PATHEXT%, so the stand-in has to be called fake-crash.exe
+	// there while still answering to fake-crash here.
+	switch strings.TrimSuffix(filepath.Base(os.Args[0]), ".exe") {
 	case "fake-healthy":
 		fakeDaemon(false)
 	case "fake-imposter":
@@ -102,11 +106,80 @@ func fake(t *testing.T, name string) (executable, socket string) {
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
 
-	executable = filepath.Join(dir, name)
-	if err := os.Symlink(self, executable); err != nil {
-		t.Fatalf("linking the stand-in daemon: %v", err)
+	executable = filepath.Join(dir, name+exeSuffix)
+	if err := standIn(self, executable); err != nil {
+		t.Fatalf("installing the stand-in daemon: %v", err)
 	}
 	return executable, filepath.Join(dir, "d.sock")
+}
+
+// exeSuffix is what Windows insists on before it will execute a file at all.
+var exeSuffix = func() string {
+	if runtime.GOOS == "windows" {
+		return ".exe"
+	}
+	return ""
+}()
+
+// assertDaemonIsGone checks that shutting the supervisor down really took the
+// daemon with it. One left holding an API key is a bug, not an inconvenience.
+//
+// How that looks differs by platform, and the difference is the design rather
+// than a wrinkle. On Unix the daemon is signalled, so it unlinks its own socket
+// on the way out and the file's absence is the evidence. On Windows there is no
+// signal to send — os/exec_windows.go implements Process.Signal for Kill alone
+// — so the daemon is always terminated and the socket file always survives it.
+// Asserting the file is gone there would be asserting that a design decision
+// taken deliberately in 4bd6d15 had not been taken.
+//
+// What must be true on both is that nothing is still serving on it, which is
+// also the condition clearStaleSocket uses to decide it may clear the file at
+// the next start.
+func assertDaemonIsGone(t *testing.T, socket string) {
+	t.Helper()
+
+	conn, err := net.DialTimeout("unix", socket, 2*time.Second)
+	if err == nil {
+		conn.Close()
+		t.Error("something is still listening on the socket after shutdown")
+	}
+
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if _, err := os.Stat(socket); err == nil {
+		t.Error("the socket outlived the daemon, so the next start has to clear it")
+	}
+}
+
+// standIn puts a runnable copy of this test binary at path.
+//
+// A symlink everywhere would be cheaper, but creating one on Windows needs
+// SeCreateSymbolicLinkPrivilege — held by an elevated shell or a machine in
+// developer mode, and by nothing else — so it is exactly the sort of thing that
+// works for whoever wrote it and fails for everyone else. A copy needs no
+// privilege and behaves identically once exec'd, which is all these tests want
+// from it.
+func standIn(self, path string) error {
+	if runtime.GOOS != "windows" {
+		return os.Symlink(self, path)
+	}
+
+	source, err := os.Open(self)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+
+	destination, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o700)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(destination, source); err != nil {
+		destination.Close()
+		return err
+	}
+	return destination.Close()
 }
 
 // watcher collects status changes so a test can wait for one.
@@ -208,9 +281,7 @@ func TestSupervisorReachesRunning(t *testing.T) {
 	cancel()
 	wg.Wait()
 
-	if _, err := os.Stat(socket); err == nil {
-		t.Error("the socket outlived the daemon, so the next start has to clear it")
-	}
+	assertDaemonIsGone(t, socket)
 	if sup.Status().State != StateStopped {
 		t.Errorf("status after shutdown = %v, want stopped", sup.Status().State)
 	}

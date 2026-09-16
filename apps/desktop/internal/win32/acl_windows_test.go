@@ -35,6 +35,49 @@ func TestEnsureOwnerOnlyDirNamesOnlyThisUser(t *testing.T) {
 	}
 }
 
+// The number of entries is not the number of trustees, and the two paths into
+// EnsureOwnerOnlyDir genuinely differ on it: CreateDirectory stores the list
+// verbatim, while applying it to an existing directory makes Windows split one
+// inheritable generic-rights entry into an effective entry and an inherit-only
+// one. Both name this user alone, which is the property that matters and the
+// property OwnerOnly asks about.
+//
+// This pins the split down rather than leaving it as a comment, because the
+// first version of this code asserted the entry count and failed on a directory
+// that was correctly locked down.
+func TestBothPathsNameOneTrustee(t *testing.T) {
+	self, err := CurrentUserSID()
+	if err != nil {
+		t.Fatalf("CurrentUserSID: %v", err)
+	}
+
+	created := filepath.Join(t.TempDir(), "starch")
+	if err := EnsureOwnerOnlyDir(created); err != nil {
+		t.Fatalf("EnsureOwnerOnlyDir: %v", err)
+	}
+
+	tightened := filepath.Join(t.TempDir(), "starch")
+	if err := os.MkdirAll(tightened, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := EnsureOwnerOnlyDir(tightened); err != nil {
+		t.Fatalf("EnsureOwnerOnlyDir: %v", err)
+	}
+
+	for _, dir := range []string{created, tightened} {
+		access, err := ReadDirAccess(dir)
+		if err != nil {
+			t.Fatalf("ReadDirAccess(%s): %v", dir, err)
+		}
+		if !access.OwnerOnly(self) {
+			t.Errorf("%s: access = %+v, want only %s", dir, access, self)
+		}
+		if access.Entries < 1 {
+			t.Errorf("%s: no entries at all, which grants nothing to anyone", dir)
+		}
+	}
+}
+
 // The case that matters more: a directory left by an earlier build, or made by
 // hand, carrying whatever its parent hands down. Trusting what is already there
 // is how a socket ends up reachable by a group somebody added years ago, so

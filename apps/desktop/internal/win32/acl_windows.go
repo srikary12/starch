@@ -3,6 +3,7 @@ package win32
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -114,18 +115,42 @@ func ownerOnlyACL() (*windows.ACL, error) {
 	return acl, nil
 }
 
-// DirAccess describes who can reach a directory, for tests and for
-// `starch config` to report rather than assert.
+// DirAccess describes who can reach a directory.
 type DirAccess struct {
-	// Trustees are the SIDs named in the directory's access list, as strings.
-	Trustees []string
+	// Allowed holds the distinct SIDs granted access, in the order the list
+	// names them. Distinct, because one trustee can legitimately appear in more
+	// than one entry: see Entries.
+	Allowed []string
+	// Denied holds the distinct SIDs explicitly refused access. Empty in
+	// everything we create; read back so that a deny entry can never be
+	// mistaken for a grant.
+	Denied []string
+	// Entries is the raw number of entries in the list, which is not the number
+	// of trustees.
+	//
+	// Applying one inheritable entry carrying a *generic* right to an existing
+	// directory yields two: Windows stores an effective entry with the generic
+	// bits mapped to specific ones, plus an inherit-only entry that keeps the
+	// generic form so children can map it for themselves. Same SID, same
+	// rights, one intent. Kept here because a count that moves for a reason
+	// nobody remembers is how a real change gets waved through later.
+	Entries int
 	// Protected reports whether inherited entries are refused.
 	Protected bool
 }
 
-// OwnerOnly reports whether the access list names this user and nobody else.
+// OwnerOnly reports whether the access list grants this user and nobody else.
+//
+// This asks how many *trustees* are named, not how many entries there are. The
+// distinction is the whole point: the security property is that no other
+// account appears, and counting entries would fail a directory that is
+// perfectly locked down — which is exactly what it did the first time this ran
+// on Windows.
 func (d DirAccess) OwnerOnly(self string) bool {
-	return d.Protected && len(d.Trustees) == 1 && d.Trustees[0] == self
+	return d.Protected &&
+		len(d.Denied) == 0 &&
+		len(d.Allowed) == 1 &&
+		d.Allowed[0] == self
 }
 
 // CurrentUserSID returns this process's user SID in string form.
@@ -169,14 +194,39 @@ func ReadDirAccess(path string) (DirAccess, error) {
 		// A nil DACL is not an empty one: it grants everyone everything.
 		return access, nil
 	}
+	access.Entries = int(acl.AceCount)
 
 	for i := uint32(0); i < uint32(acl.AceCount); i++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(acl, i, &ace); err != nil {
 			return DirAccess{}, fmt.Errorf("reading entry %d of %s: %w", i, path, err)
 		}
-		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-		access.Trustees = append(access.Trustees, sid.String())
+		sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart)).String()
+
+		// ACCESS_ALLOWED_ACE and ACCESS_DENIED_ACE have the same layout, so the
+		// cast above is sound either way — but reading the type is not
+		// optional. Treating a deny entry as a grant would turn this from a
+		// check into a rubber stamp, and it is the only thing standing behind
+		// the claim that the socket directory names one account.
+		switch ace.Header.AceType {
+		case windows.ACCESS_ALLOWED_ACE_TYPE:
+			access.Allowed = appendDistinct(access.Allowed, sid)
+		case windows.ACCESS_DENIED_ACE_TYPE:
+			access.Denied = appendDistinct(access.Denied, sid)
+		default:
+			// Audit and alarm entries belong to the SACL, not here. Anything
+			// else is something this code does not understand, and quietly
+			// ignoring it would be the wrong instinct in a security check.
+			return DirAccess{}, fmt.Errorf(
+				"entry %d of %s is of unrecognized type %d", i, path, ace.Header.AceType)
+		}
 	}
 	return access, nil
+}
+
+func appendDistinct(sids []string, sid string) []string {
+	if slices.Contains(sids, sid) {
+		return sids
+	}
+	return append(sids, sid)
 }

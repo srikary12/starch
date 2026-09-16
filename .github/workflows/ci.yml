@@ -202,6 +202,11 @@ jobs:
           go test -count=1 -v ./internal/secret/ ./internal/win32/ | tee /tmp/windows.log
           grep -q -- '--- PASS: TestSetGetDelete' /tmp/windows.log
           grep -q -- '--- PASS: TestEnsureOwnerOnlyDirNamesOnlyThisUser' /tmp/windows.log
+          # Not TestEnsureOwnerOnlyDirTightensWhatItFinds: it skips itself when
+          # the runner's temp directory already blocks inheritance, which is a
+          # legitimate outcome rather than a silent hole. TestBothPathsNameOneTrustee
+          # covers the same path and cannot skip.
+          grep -q -- '--- PASS: TestBothPathsNameOneTrustee' /tmp/windows.log
           grep -q -- '--- PASS: TestConfineToShellLifetime' /tmp/windows.log
 
       - name: Builds for every Windows target we claim

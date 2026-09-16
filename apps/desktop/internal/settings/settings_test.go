@@ -149,13 +149,7 @@ func TestSaveIsAtomicAndPrivate(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	info, err := os.Stat(s.Path())
-	if err != nil {
-		t.Fatalf("Stat: %v", err)
-	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Errorf("mode = %o, want 0600", perm)
-	}
+	assertOwnerOnly(t, s.Path())
 
 	// Saving again must leave nothing behind: a stray temporary file in the
 	// config directory is the visible symptom of a save that did not finish.
