@@ -297,16 +297,19 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 
 // environment is deliberately small: the daemon needs nothing from the user's
 // shell, and a narrow environment is one less way for a stray variable to
-// change its behaviour. The XDG variables are passed through because the
-// daemon resolves its own presets path from them.
+// change its behaviour.
+//
+// What counts as the minimum is per-platform, and getting that wrong does not
+// look like a configuration problem from the outside — it looks like a daemon
+// that will not start. See env_windows.go, which exists because this list was
+// written on a Mac and the Windows equivalent of HOME was not on it.
 func (s *Supervisor) environment(token string) []string {
-	env := []string{
-		"PATH=/usr/bin:/bin",
-		brand.EnvPrefix + "TOKEN=" + token,
-		brand.EnvPrefix + "SOCKET=" + s.opts.SocketPath,
-		brand.EnvPrefix + "IDLE_TIMEOUT=" + s.opts.IdleTimeout.String(),
-	}
-	for _, name := range []string{"HOME", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR"} {
+	env := append(systemEnvironment(),
+		brand.EnvPrefix+"TOKEN="+token,
+		brand.EnvPrefix+"SOCKET="+s.opts.SocketPath,
+		brand.EnvPrefix+"IDLE_TIMEOUT="+s.opts.IdleTimeout.String(),
+	)
+	for _, name := range inheritedNames() {
 		if value, ok := os.LookupEnv(name); ok {
 			env = append(env, name+"="+value)
 		}
