@@ -5,6 +5,13 @@ apps/macos/.build/
 apps/macos/build/
 apps/macos/*.xcodeproj
 
+# `go build ./cmd/starch` with no -o drops the binary in the module directory,
+# which is how a 2.3 MB Linux executable was committed once already.
+/apps/desktop/starch
+/apps/desktop/starch.exe
+/apps/desktop/starchd
+/apps/desktop/starchd.exe
+
 # Go
 *.test
 *.out

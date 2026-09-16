@@ -171,7 +171,9 @@ jobs:
           set -euo pipefail
           go vet ./...
           (cd apps/desktop && go vet ./...)
-          unformatted=$(gofmt -l . apps/desktop)
+          # gofmt walks directories, not modules, so "." already covers
+          # apps/desktop — naming it again would list every file twice.
+          unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
             echo "these files need gofmt:"; echo "$unformatted"; exit 1
           fi

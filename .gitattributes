@@ -1,0 +1,15 @@
+# Line endings are LF in the repository and LF in the working tree, on every
+# platform. Without this, Git for Windows checks files out with CRLF, and gofmt
+# — which only ever emits LF — then reports every Go file in the tree as
+# unformatted. That is not a style preference: it is the difference between the
+# Windows CI job checking our formatting and failing before it runs a line of
+# Windows code.
+#
+# Nothing here is built by a Windows-native toolchain that wants CRLF: the
+# shell is Go, and the CI steps run under the bash that ships with Git.
+* text=auto eol=lf
+
+# Binary, so Git neither converts nor diffs them.
+*.png binary
+*.icns binary
+*.pdf binary
