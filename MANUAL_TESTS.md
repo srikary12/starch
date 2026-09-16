@@ -509,3 +509,124 @@ Not here yet, because they do not exist yet: the hot key, the overlay, and
 replacing text in place. Those arrive with the X11 work and bring their own
 list — the interesting part of which will be the capture and replace matrix,
 per application, the way M1's was on macOS.
+
+## M7 — the Windows shell, headless half
+
+Everything here needs a real Windows machine, and **none of it needs a
+desktop**: the hot key, the overlay, the tray and replacing text in place are
+not written yet. This list covers `starch config` and `starch rewrite`, which
+is the whole product minus the desktop — the same milestone M6 reached on Linux
+before the X11 work.
+
+Read the M6 tests above as the baseline. What is repeated below is only what
+Windows does differently, and every one of those differences is there because
+the platform forced it, not because it was preferred.
+
+CI already runs this code on `windows-latest` against a stub provider, so what
+these checks add is a real user profile, a real Credential Manager, a real
+reboot, and Task Manager.
+
+```
+go build -o build\starchd.exe .\cmd\starchd
+cd apps\desktop
+go build -o ..\..\build\starch.exe .\cmd\starch
+```
+
+There is no installer yet. `Locate()` looks for `starchd.exe` beside the shell
+first, so keeping both in `build\` is enough; `set STARCH_DAEMON=<path>`
+overrides it.
+
+### Configuration, against a real Credential Manager
+
+Credential Manager is part of the OS and decrypts under your logon session, so
+it never prompts. M6's tests 106–108 — the locked-keyring pair — have no
+analogue here, which is the one way this platform is easier than Linux.
+
+| # | Check | Expected |
+|---|---|---|
+| 128 | `starch config` on a machine with nothing set up | Prints defaults, and `API key  not set` |
+| 129 | `starch config --key`, type a key, in **cmd.exe** | Nothing echoes while typing |
+| 130 | The same in **PowerShell** | Nothing echoes. Different console host, different failure. |
+| 131 | The same in **Windows Terminal** | Nothing echoes |
+| 132 | Control Panel → Credential Manager → Windows Credentials | One **Generic** credential, `Starch/api-key.<provider>`, persistence **Local machine** — *not* Enterprise, which would roam the key to every machine you log into |
+| 133 | `starch config` again | Reports the key is saved, and **the key itself is nowhere in the output** |
+| 134 | `type %APPDATA%\Starch\settings.json` | No key anywhere in it |
+| 135 | `starch config --provider gemini --key`, then switch back | Each provider keeps its own key. One entry per provider. |
+| 136 | `echo x\| starch config --key` (piped) | Stored without a prompt |
+| 137 | Delete the entry from Credential Manager by hand, then `starch rewrite` | Asks for a key rather than failing obscurely |
+
+### The socket, and who can reach it
+
+The security-critical section, because this is where Windows differs most: the
+daemon cannot enforce its own `0600`/`0700` there — `Chmod` only toggles the
+read-only attribute and returns success having done nothing — so the shell sets
+an access list instead, before the daemon starts. CI checks that in a temp
+directory. These check it where it actually lives.
+
+| # | Check | Expected |
+|---|---|---|
+| 138 | `icacls %LOCALAPPDATA%\Starch` | **Your account and nothing else.** No `BUILTIN\Administrators`, no `NT AUTHORITY\SYSTEM`, no `(I)` inherited entries |
+| 139 | `dir %LOCALAPPDATA%\Starch` during a rewrite | A `starchd.sock` |
+| 140 | Nothing in `%APPDATA%\Starch` but `settings.json` and `presets.json` | The socket must **not** be in Roaming: a roaming profile would sync it to a file server and restore it at next logon |
+| 141 | Widen it by hand — `icacls %LOCALAPPDATA%\Starch /grant Everyone:F` — then run `starch rewrite` | The next start tightens it back to you alone. Check with 138 again. |
+| 142 | `netstat -ano \| findstr <starchd pid>` mid-rewrite | No output. **Any TCP port here is a serious bug.** |
+| 143 | From a *second* Windows account, try to read `%LOCALAPPDATA%\Starch` on the first | Access denied |
+
+### Lifetime, which has no signal behind it
+
+On Windows there is no graceful stop to send — `Process.Signal` implements
+`Kill` and nothing else — and orphans are not reparented, so neither backstop
+the other two platforms use exists. A job object replaces both, and it is
+stronger: the OS kills the daemon when the shell's handle closes, for any
+reason at all. These are the checks that prove it.
+
+| # | Check | Expected |
+|---|---|---|
+| 144 | `tasklist \| findstr starchd` after several rewrites | Nothing. Each run cleans up. |
+| 145 | **End task** on `starch.exe` from Task Manager mid-rewrite | `starchd.exe` disappears **immediately** — not in 30 seconds, which is what the idle timeout alone would give you |
+| 146 | `taskkill /F /IM starchd.exe` mid-rewrite, then rewrite again | Works. The leftover `starchd.sock` is cleared, not treated as a live daemon. |
+| 147 | After 146, `dir %LOCALAPPDATA%\Starch` | The stale `starchd.sock` is **expected** to still be there. Unlike Linux, the daemon is always killed and never unlinks its own. |
+| 148 | Reboot, then `dir %LOCALAPPDATA%\Starch`, then `starch rewrite` | A stale socket may survive the reboot — `%LocalAppData%` is not `XDG_RUNTIME_DIR` and is not cleared. The rewrite must work anyway. |
+
+Test 148 is the one with no counterpart anywhere else. On Linux the socket
+directory is wiped with the session; here it persists indefinitely, so a stale
+socket is not an edge case, it is Monday morning.
+
+### The rewrite loop
+
+| # | Check | Expected |
+|---|---|---|
+| 149 | `echo thx for the update\| starch rewrite` | Text appears **progressively** |
+| 150 | Time to the first character | Under 500ms on a warm daemon |
+| 151 | `starch rewrite --preset concise` and `--preset friendly` | Visibly different output |
+| 152 | Ctrl-C part-way through | Stops at once. Check the provider's dashboard: **the generation stopped being billed**, not just displayed. |
+| 153 | Unplug the network, `starch rewrite` | "could not connect", naming the endpoint — not a stack trace |
+| 154 | Point `--endpoint` at a local Ollama and clear the key | Works with no key and no Credential Manager entry at all |
+
+Test 152 matters as much here as 115 did on Linux, and for the same reason: a
+client that merely stops reading has cancelled nothing and is still being
+billed.
+
+### Paths and the things that only break on someone else's machine
+
+| # | Check | Expected |
+|---|---|---|
+| 155 | Run as a user whose name has a **space** (`C:\Users\Jane Smith`) | Everything works. Unquoted paths fail here and nowhere else. |
+| 156 | Run as a user with a **long** name, and check the socket path length | Under 103 bytes. `C:\Users\<name>\AppData\Local\Starch\starchd.sock` is the budget, and the failure is a bare "invalid argument" from bind if it is blown. |
+| 157 | Run as a user with a **non-ASCII** name (`C:\Users\Zoë`) | Everything works |
+| 158 | Windows 10 **1803 or older** | AF_UNIX arrived in 1803. Below it, expect a clear failure to bind, not a crash. |
+| 159 | Edit `settings.json` by hand, set `"hotkey": "Ctrl+C"` | Refused on next run, with the reason, and the default used |
+| 160 | Truncate `settings.json` mid-file | Warns, uses defaults, still runs |
+| 161 | Copy `starch.exe` to a machine that has never seen it and run it | Note whether SmartScreen blocks it. It will until the binaries are signed; this records what a first-time user actually hits. |
+
+Tests 155–158 are the ones worth doing on someone else's machine rather than
+yours. Every one of them is a path or an encoding assumption that is invisible
+on a developer account called `runneradmin`.
+
+Not here yet, because they do not exist yet: the hot key, UI Automation
+capture, the clipboard replace, the overlay and the tray. Those arrive with the
+Series 2 work and bring their own list — the interesting part of which will be
+the per-application capture and replace matrix, the way M1's was on macOS, plus
+the two guarantees that matter most on this platform: that the clipboard is
+restored on **every** path including errors, and that Ctrl-Z in the host
+application undoes the replacement in **one** step.
