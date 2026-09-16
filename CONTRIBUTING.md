@@ -346,6 +346,7 @@ Run `make check` before opening a PR. That is exactly what CI runs, so a green
 | **App bundle** | a universal build, then checks both binaries carry both slices, the version really got substituted into `Info.plist`, the bundle identifier has not moved, and the signature seals |
 | **Daemon cross-compiles** | builds `starchd` for darwin, linux and windows, and runs the Go suite on Linux |
 | **Linux shell** | vet, the suite under `-race`, both Linux architectures, and that the two binaries install where each other expects |
+| **Windows shell** | vet, both suites, both Windows architectures, and the whole rewrite loop end to end against a stub provider |
 
 The last two exist because the README claims the Go layer is ready for other
 platforms, and now that one of them is half-built the claim is testable.
@@ -356,6 +357,20 @@ tests skip themselves when no session bus is present, and a skipped test reads
 as a pass, so the job asserts afterwards that the locked-keyring case actually
 ran. That suite is the only thing in the repository depending on software
 outside it.
+
+The Windows job asserts the same way, for the same reason: Credential Manager
+and the job object are the OS, not something that can be stood in for, so the
+tests that touch them are the ones most worth confirming actually ran. It also
+runs the daemon's own suite — the first place that happens on Windows — and
+then the whole loop end to end against a stub provider, which is the only
+proof that the socket ACL, the job object, `AF_UNIX` and a streamed rewrite
+work together rather than merely compile.
+
+Neither Windows suite runs under `-race`. The race detector requires cgo
+everywhere except macOS (`cmd/go/internal/work/init.go`), and needing a C
+toolchain would undo the thing that makes this shell easy to build. The shared
+packages, which is where the concurrency actually is, are raced on macOS and
+Linux.
 
 The bundle job's checks are the interesting ones — each is a failure that
 otherwise ships silently. A universal build that quietly produced one
