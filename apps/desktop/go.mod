@@ -24,6 +24,6 @@ require (
 	github.com/srikary12/starch v0.0.0
 )
 
-require golang.org/x/sys v0.27.0 // indirect
+require golang.org/x/sys v0.27.0
 
 replace github.com/srikary12/starch => ../..

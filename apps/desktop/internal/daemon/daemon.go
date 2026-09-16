@@ -21,7 +21,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/srikary12/starch/apps/desktop/internal/client"
@@ -235,12 +234,19 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 	s.mu.Unlock()
 	s.setStatus(Status{State: StateStarting})
 
+	// Before the spawn, not after: on Windows this is what restricts the
+	// socket's directory to this user, and a daemon started first would bind
+	// inside an unprotected one. Fatal, because a key on a socket anyone can
+	// reach is worse than a rewrite that does not happen.
+	if err := prepareSocketDir(s.opts.SocketPath); err != nil {
+		return fmt.Errorf("securing the socket directory: %w", err)
+	}
+
 	cmd := exec.CommandContext(ctx, s.opts.Executable)
 	cmd.Env = s.environment(token)
-	// SIGTERM rather than the default SIGKILL: the daemon unlinks its socket
-	// on the way out, and a killed one leaves a file the next start has to
-	// probe and clear. WaitDelay is the backstop for one that ignores it.
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
+	// How to stop it differs enough per platform to be worth its own file;
+	// see lifetime_unix.go and lifetime_windows.go.
+	cmd.Cancel = func() error { return stopGracefully(cmd) }
 	cmd.WaitDelay = 2 * time.Second
 	// The child inherits our process group on purpose: killing the shell's
 	// group from a terminal should take the daemon with it.
@@ -254,6 +260,16 @@ func (s *Supervisor) runOnce(ctx context.Context) error {
 		return fmt.Errorf("launching %s: %w", brand.Daemon, err)
 	}
 	s.log.Info("spawned daemon", "pid", cmd.Process.Pid, "socket", s.opts.SocketPath)
+
+	// Immediately after Start, so the window in which a crash could strand a
+	// daemon holding an API key is as close to nothing as it can be.
+	if err := confine(cmd); err != nil {
+		// Not fatal: the daemon is running and usable, and the idle timeout
+		// still reclaims it eventually. Worth saying loudly, because the
+		// guarantee this provides is the one that just got weaker.
+		s.log.Error("could not tie the daemon's lifetime to this process",
+			"error", err, "fallback", "the daemon's idle timeout")
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(1)
