@@ -272,6 +272,11 @@ func wndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintptr {
 		}
 		return 0
 
+	case wmTrayCallback:
+		// The shell packs the mouse event into lParam.
+		trayMessage(lParam)
+		return 0
+
 	case wmDestroyClipboard:
 		// Someone else took ownership before pasting ours. Whatever was waiting
 		// is never going to be rendered, so release it rather than let it sit
