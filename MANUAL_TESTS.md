@@ -623,10 +623,98 @@ Tests 155–158 are the ones worth doing on someone else's machine rather than
 yours. Every one of them is a path or an encoding assumption that is invisible
 on a developer account called `runneradmin`.
 
-Not here yet, because they do not exist yet: the hot key, UI Automation
-capture, the clipboard replace, the overlay and the tray. Those arrive with the
-Series 2 work and bring their own list — the interesting part of which will be
-the per-application capture and replace matrix, the way M1's was on macOS, plus
-the two guarantees that matter most on this platform: that the clipboard is
-restored on **every** path including errors, and that Ctrl-Z in the host
-application undoes the replacement in **one** step.
+## M8 — the Windows desktop
+
+`starch run`. Everything above was the loop without a desktop; this is the
+product. **None of it is covered by CI at all** — GitHub's `windows-latest`
+runners have no guaranteed interactive desktop, so the hot key, the overlay and
+every synthetic keystroke are unverified until someone presses the key.
+
+```
+go build -o build\starchd.exe .\cmd\starchd
+cd apps\desktop
+go build -o ..\..\build\starch.exe .\cmd\starch
+..\..\build\starch.exe run
+```
+
+The tray does not exist yet, so `starch run` holds the console it was started
+from. Ctrl-C stops it.
+
+### The loop
+
+| # | Check | Expected |
+|---|---|---|
+| 162 | Select text in Notepad, press the shortcut | Overlay appears near the selection, text streams in |
+| 163 | Press Enter | The selection is replaced with the rewrite |
+| 164 | **Ctrl-Z once**, in the host application | The original text is back, in **one** step. Not character by character. |
+| 165 | Press the shortcut with nothing selected | A notice that says so, no overlay, no rewrite, nothing billed |
+| 166 | Press Escape while the text is still streaming | Overlay closes at once, nothing is replaced. Check the provider dashboard: **the generation stopped being billed** |
+| 167 | Press Enter while the text is still streaming | **Nothing happens.** A partial rewrite must never land in a document |
+| 168 | Press Enter after it finishes | Replaces |
+| 169 | Time from keypress to first character | Under 500ms on a warm daemon |
+
+### The two guarantees, which is what this list is really for
+
+| # | Check | Expected |
+|---|---|---|
+| 170 | Copy something distinctive (`ZZZ-MARKER`), select other text, rewrite it, accept | Clipboard still holds `ZZZ-MARKER` afterwards |
+| 171 | The same, but press Escape instead | Clipboard still holds `ZZZ-MARKER` |
+| 172 | The same, but with the daemon killed mid-stream so the rewrite fails | Clipboard still holds `ZZZ-MARKER`. **Every error path, not just the tidy ones** |
+| 173 | Copy an **image**, then rewrite some text and accept | The image is **gone** — a known and documented limitation. What must *not* happen is the rewrite being left on the clipboard |
+| 174 | Rewrite in a slow application (a large Word document) | The pasted text is the rewrite, never your previous clipboard. This is what the delayed-render path exists to guarantee |
+
+### Focus, which is where the design is most likely to be wrong
+
+| # | Check | Expected |
+|---|---|---|
+| 175 | Watch the title bar of the host application while the overlay is open | It stays active. The overlay must **never** take focus |
+| 176 | With the overlay open, the text cursor in the host application | Still blinking where it was; the selection is still highlighted |
+| 177 | With the overlay open, type an ordinary letter | It goes into the **application underneath**, not the overlay. The keyboard hook must only swallow Enter and Escape |
+| 178 | With the overlay open, press Tab, arrows, Backspace | All reach the application underneath |
+| 179 | After the overlay closes, press Escape in any application | Works normally. A hook left installed would swallow Escape machine-wide |
+| 180 | Kill `starch.exe` while an overlay is open, then press Escape anywhere | Works normally. The hook must not outlive the process |
+
+### Applications, the matrix
+
+The equivalent of M1's on macOS. Capture is clipboard-only for now — UI
+Automation is not implemented — so anything that refuses a synthetic Ctrl-C
+fails to capture, and that is what this is measuring.
+
+| # | Application | Capture | Replace | Single-step undo |
+|---|---|---|---|---|
+| 181 | Notepad | | | |
+| 182 | WordPad / Word | | | |
+| 183 | Chrome — a plain textarea | | | |
+| 184 | Chrome — Gmail compose | | | |
+| 185 | Edge | | | |
+| 186 | Slack | | | |
+| 187 | VS Code | | | |
+| 188 | Outlook (desktop) | | | |
+| 189 | Windows Terminal | | | |
+| 190 | A dialog box's text field | | | |
+
+Fill it in rather than reporting pass or fail. A blank cell is a finding.
+
+### Edges
+
+| # | Check | Expected |
+|---|---|---|
+| 191 | Select text near the **right edge** of the screen, rewrite | Overlay fully on screen and readable |
+| 192 | The same near the **bottom edge** | Overlay appears **above** the selection, not covering it |
+| 193 | On a second monitor, and on a monitor at 150% scaling | Overlay appears on the right screen, legible |
+| 194 | Hold the shortcut down | **One** rewrite, not one per key repeat. Each repeat would be billed |
+| 195 | Press the shortcut again while an overlay is already open | No second overlay, no second rewrite |
+| 196 | Rewrite in an application **running as administrator** | Expect capture or paste to fail with the message about elevation — not silence. Windows blocks input from a non-elevated process to an elevated window |
+| 197 | Set `"hotkey"` to something already taken (`Ctrl+Alt+Delete`) | A message naming the shortcut and saying how to change it, not a silent no-op |
+| 198 | Quit with Ctrl-C, then `tasklist \| findstr starchd` | Nothing. The job object takes the daemon with the shell |
+
+Tests 164, 167 and 173 are the three worth doing first. 164 and 167 are the two
+promises this product makes about other people's documents, and 173 is a
+limitation I would rather you saw deliberately than discovered by accident.
+
+196 is the one most likely to be a real-world complaint, because Task Manager
+and a great deal of IT software run elevated and the failure is otherwise
+completely silent.
+
+Not here yet: UI Automation capture, which would read the selection without
+touching the clipboard at all in applications that support it, and the tray.

@@ -124,12 +124,20 @@ func (p *fakePlatform) Replace(_ context.Context, _ Capture, replacement string)
 
 func (p *fakePlatform) Overlay(context.Context, Capture) (Overlay, error) {
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.overlayed++
-	p.mu.Unlock()
 	if p.overlayErr != nil {
 		return nil, p.overlayErr
 	}
 	return p.overlay, nil
+}
+
+// setOverlay swaps in the next overlay, under the lock, because a test that
+// triggers twice does so from a different goroutine than the flow reads from.
+func (p *fakePlatform) setOverlay(o *fakeOverlay) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.overlay = o
 }
 
 func (p *fakePlatform) Notify(title, _ string) {
@@ -375,5 +383,69 @@ func TestTheZeroDecisionIsCancelled(t *testing.T) {
 func TestAShellWithoutAPlatformSaysSo(t *testing.T) {
 	if err := (&Shell{}).Trigger(context.Background()); !errors.Is(err, ErrNoPlatform) {
 		t.Fatalf("err = %v, want ErrNoPlatform", err)
+	}
+}
+
+// The hot key is global and cheap to press. A second press while the first
+// rewrite is still streaming would open a second overlay over the first, start
+// a second generation the user pays for, and leave two of them racing to paste
+// into the same document.
+//
+// Found by writing the manual test for it rather than by the code: nothing
+// stopped it.
+func TestASecondPressWhileRewritingIsIgnored(t *testing.T) {
+	p := &fakePlatform{capture: Capture{Text: "thx"}, overlay: newOverlay()}
+	p.overlay.waitForDone = true
+
+	streaming := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	slow := streamFunc(func(context.Context, client.RewriteRequest, func(string)) (string, error) {
+		// Once, because the last press in this test runs the same streamer
+		// again after the first rewrite has finished.
+		once.Do(func() { close(streaming) })
+		<-release
+		return "Thanks.", nil
+	})
+
+	shell := shellWith(p, slow)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	first := make(chan error, 1)
+	go func() { first <- shell.Trigger(ctx) }()
+	<-streaming
+
+	// The second press, while the first is mid-stream.
+	if err := shell.Trigger(ctx); err != nil {
+		t.Fatalf("the second press returned an error rather than being ignored: %v", err)
+	}
+
+	p.mu.Lock()
+	overlays := p.overlayed
+	p.mu.Unlock()
+	if overlays != 1 {
+		t.Errorf("opened %d overlays, want 1 — the second press started another rewrite", overlays)
+	}
+
+	close(release)
+	p.overlay.decide <- Accepted
+	if err := <-first; err != nil {
+		t.Fatalf("the first rewrite: %v", err)
+	}
+
+	// And once it is done, the shortcut works again.
+	next := newOverlay()
+	next.waitForDone = true
+	next.decide <- Cancelled
+	p.setOverlay(next)
+	if err := shell.Trigger(ctx); err != nil {
+		t.Fatalf("a press after the first finished: %v", err)
+	}
+	p.mu.Lock()
+	overlays = p.overlayed
+	p.mu.Unlock()
+	if overlays != 2 {
+		t.Errorf("opened %d overlays in total, want 2 — the shortcut stopped working", overlays)
 	}
 }

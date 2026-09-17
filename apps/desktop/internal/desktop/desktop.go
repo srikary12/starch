@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/srikary12/starch/apps/desktop/internal/client"
 )
@@ -154,6 +155,10 @@ type Shell struct {
 
 	// Preset is the rewrite style, from settings.
 	Preset string
+
+	// running guards against a second rewrite starting while one is in
+	// progress. See Trigger.
+	running atomic.Bool
 }
 
 // ErrNoPlatform is returned by Trigger on a Shell that was not fully built. It
@@ -181,6 +186,17 @@ func (s *Shell) Trigger(ctx context.Context) error {
 	if s.Platform == nil || s.Streamer == nil {
 		return ErrNoPlatform
 	}
+
+	// One rewrite at a time. The hot key is global and cheap to press, and a
+	// second press while the first is still streaming would open a second
+	// overlay over the first, start a second generation the user pays for, and
+	// leave two things racing to paste into the same document. Ignoring the
+	// press is the right answer: the user can see an overlay already open, and
+	// Escape is how they stop it.
+	if !s.running.CompareAndSwap(false, true) {
+		return nil
+	}
+	defer s.running.Store(false)
 
 	captured, err := s.Platform.Capture(ctx)
 	// Deferred before the error check on purpose: a capture that failed
