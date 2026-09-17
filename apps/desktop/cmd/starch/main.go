@@ -50,10 +50,12 @@ func main() {
 func run(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		usage()
-		return errors.New("the desktop shell is not built yet; `starch rewrite` is the whole loop without it")
+		return runDesktop(ctx)
 	}
 
 	switch args[0] {
+	case "run":
+		return runDesktop(ctx)
 	case "config":
 		return cli.Run(args[1:], configEnv())
 	case "rewrite":
@@ -72,6 +74,8 @@ func run(ctx context.Context, args []string) error {
 func usage() {
 	fmt.Fprintf(os.Stderr, `%s — rewrite selected text, without leaving the app you are in.
 
+  starch run               the shell: a global shortcut that rewrites
+                           whatever text is selected
   starch config            show or change the configuration
   starch config --list     the providers, endpoints and models on offer
   starch config --key      store an API key in the keyring
