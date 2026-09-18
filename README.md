@@ -73,9 +73,13 @@ thin native shell.
 `starchd` is a local daemon on your machine, not a service anyone operates. The
 shell spawns it at login, supervises it, and makes sure it dies with the app.
 
-A second shell is being written for Linux, in Go, and it is the test of that
-claim: it reuses the same daemon unchanged, over the same socket, and the only
-thing it had to add was the OS-specific half. Windows would be a third.
+Two more shells are being written in Go, and they are the test of that claim.
+Both reuse the same daemon unchanged, over the same socket, and the only thing
+either had to add was the OS-specific half. Windows got there first and proved
+it: the daemon needed two corrections for that platform — it was reporting
+success for a socket permission Windows cannot set, and it needed a job object
+because neither of its usual shutdown backstops exists there — and nothing else
+about it changed.
 
 The split also pays for itself on latency. A long-lived daemon keeps a warm
 HTTP client with keep-alive to your provider, so every rewrite after the first
@@ -138,10 +142,22 @@ D-Bus, so the shell needs no new dependency at all.
 
 ### Windows
 
-**The shell works; it is not packaged.** The whole loop is there — a global
-shortcut, capture, a streaming overlay, replace in place, and an icon in the
-notification area — but there is no installer and the binaries are unsigned, so
-SmartScreen will warn about them until that changes.
+**The rewrite loop is verified. The desktop half is written but unproven.**
+
+`starch config` and `starch rewrite` run on Windows and are exercised on every
+pull request against a real Windows runner, end to end, against a stub provider.
+That part works.
+
+The desktop half — the global shortcut, capture, the streaming overlay, replace
+in place, and the notification-area icon — is complete and compiles, and
+everything about it that can be checked without a desktop is tested. But
+GitHub's runners have no interactive desktop, so **no machine has yet executed a
+line of it**: not a keystroke, not a window, not a paste. Until somebody works
+through M8 in [MANUAL_TESTS.md](MANUAL_TESTS.md) on a real Windows desktop,
+treat it as untested code rather than a feature.
+
+There is also no installer, and the binaries are unsigned, so SmartScreen will
+warn about them until that changes.
 
 ```
 go build -o build\starchd.exe .\cmd\starchd
