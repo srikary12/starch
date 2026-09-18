@@ -5,7 +5,8 @@
 | | |
 |---|---|
 | macOS | 13.0 or later, to build the macOS app |
-| Linux | any X11 desktop, plus a keyring providing `org.freedesktop.secrets` |
+| Linux | a Wayland session with `xdg-desktop-portal`, plus a keyring providing `org.freedesktop.secrets` |
+| Windows | Windows 10 1803 or later. Nothing else — no C toolchain, no runtime |
 | Go | 1.23+ (`CGO_ENABLED=0` — see below) |
 | Xcode | required to **run the Swift tests** |
 
@@ -109,70 +110,102 @@ The root Go module has zero and the Swift package has zero, and both must stay
 that way: the daemon is the process holding an API key, and everything it links
 is something to audit.
 
-The Linux shell is the one agreed exception, because Go's standard library has
-no X11, no D-Bus and no font rasteriser. Three are approved, all pure Go so
-that `CGO_ENABLED=0` still holds:
+The desktop module is the one agreed exception, because Go's standard library
+has no D-Bus. It is currently a list of two, both pure Go so `CGO_ENABLED=0`
+still holds:
 
 | | |
 |---|---|
-| `github.com/jezek/xgb` | the X11 protocol. No dependencies of its own. |
-| `github.com/godbus/dbus/v5` | the Secret Service, and the tray icon |
-| `golang.org/x/image` | rasterising text in the overlay |
+| `github.com/godbus/dbus/v5` | the Secret Service, the portals, and the tray on Linux |
+| `golang.org/x/sys` | the Win32 and Windows security APIs |
 
-Nothing else. In particular no GTK or Qt binding: the shell draws its own
-overlay, which needs no widgets, and that is why settings are a terminal
-command rather than a window.
+`github.com/jezek/xgb` was approved and is no longer needed: the Linux desktop
+goes through portals, which are D-Bus, so there is no X11 protocol to speak.
+`golang.org/x/image` was approved for rasterising overlay text and has not been
+needed either — Windows draws its overlay with GDI, and the Wayland one will
+know what it needs when it is written.
 
-## The Linux shell targets X11 first
+Nothing else. In particular no GTK or Qt binding, and no COM binding library:
+the shell draws its own overlay, which needs no widgets, and that is why
+settings are a terminal command rather than a window.
 
-This is a narrowing made on purpose, and it is worth writing down why, because
-"just add Wayland" looks like a small follow-up and is not.
+## What each platform costs
 
-Linux is not one target for this product. It is three, and they differ on
-exactly the three things the shell does — take a global shortcut, read the
-selection, put text back.
+### Linux: Wayland, through portals
 
-**Reading the selection is *better* than on macOS, on two of the three.** On
-X11, and on Wayland under KWin or a wlroots compositor, selecting text already
-puts it in the PRIMARY selection: readable with no synthetic Ctrl-C, no
-clipboard to save and restore, and no permission of any kind. GNOME's Mutter
-implements neither `wlr-data-control` nor its successor `ext-data-control-v1`,
-so GNOME under Wayland is the one place that cannot.
+The Linux desktop targeted X11 first. That decision is reversed, and both
+reasons arrived after it was taken.
 
-**Putting text back is where Wayland costs something.** The accessibility API
-is the natural route — AT-SPI2 is D-Bus, so it works identically under X11 and
-Wayland — but [no Chromium element exposes `org.a11y.atspi.EditableText`
-anywhere in its tree](https://xa11y.dev/explanation/accessibility-quirks/).
-That rules out every Electron application, VS Code, Slack, Discord and Chrome
-itself, which is the same verdict the M1 matrix reached on macOS: **paste is
-the common path, not the fallback.** Synthetic input is therefore load-bearing,
-and on Wayland that means the RemoteDesktop portal — a permission dialog, a
-persistent remote-control indicator under GNOME, and restore tokens that [do
-not survive a reboot under
-KDE](https://www.mail-archive.com/kde-bugs-dist@kde.org/msg877541.html). Going
-through XWayland's XTEST bridge instead produces ["Allow remote interaction"
-popups every few minutes with almost zero
-context](https://www.semicomplete.com/blog/xdotool-and-exploring-wayland-fragmentation/).
-There is no Wayland equivalent of granting Accessibility once and never
-thinking about it again.
+**GNOME removed the X11 session.** Compile-disabled in 49, gone outright in 50,
+which shipped in March 2026 and is what Ubuntu 26.04 carries. An X11-only shell
+would not reach a GNOME desktop at all.
 
-**The overlay cannot follow the selection under GNOME.** Mutter [implements no
-layer-shell](https://gitlab.gnome.org/GNOME/mutter/-/work_items/973) and
-Wayland gives clients no global coordinates. Cursor-anchored is possible on X11
-and on KWin/wlroots, and not on GNOME.
+**The clipboard problem turned out to have a solution.** Mutter implements
+neither `wlr-data-control` nor `ext-data-control-v1`, which is what made reading
+the clipboard under GNOME look impossible. But
+`org.freedesktop.portal.Clipboard` exists, scoped to a RemoteDesktop session,
+and both `xdg-desktop-portal-gnome` and `-kde` implement it — they speak
+`ext-data-control-v1` to the compositor themselves. So one RemoteDesktop session
+covers reading the clipboard *and* synthesising the keystrokes, GlobalShortcuts
+covers the hot key, and all of it is D-Bus.
 
-Two smaller ones: there is no system tray under GNOME without a shell extension
-(Ubuntu ships one, Fedora does not), and the global shortcut does have a portal
-— `xdg-desktop-portal-gnome` 48+, KDE, Hyprland — with a universal fallback of
-binding a command in the desktop's own keyboard settings, which is the same
-shape as the Services checkbox macOS already needs.
+What it costs, stated plainly:
 
-So X11 buys a complete, prompt-free experience today, on XFCE, Cinnamon, MATE
-and KDE's X11 session, and it is the only way to have the whole loop working
-before deciding what Wayland is worth. The cost is stated plainly: **GNOME
-compile-disabled its X11 session in 49 and removed it in 50**, so this does not
-reach a GNOME desktop at all, and it is not a long-term answer on its own.
-Wayland is a separate decision with its own trade-offs, not a later chore.
+- **A permission dialog on first use**, for the RemoteDesktop session. There is
+  no Wayland equivalent of granting Accessibility once and never again, and
+  restore tokens do not survive a reboot on every compositor.
+- **`xdg-desktop-portal-wlr` ships no GlobalShortcuts**, so Sway and Hyprland
+  bind the shortcut in the compositor's own config and invoke `starch` — a
+  different path that has to be documented rather than reported as a bug.
+- **No layer-shell on GNOME**, so positioning the overlay near the selection is
+  not solved. Wayland gives clients no global coordinates either.
+
+### Windows: two things the platform will not do
+
+**POSIX modes are not ignored, they are accepted and discarded.**
+`syscall.Chmod` on Windows toggles `FILE_ATTRIBUTE_READONLY` and drops the mode
+bits, returning `nil` either way. So the daemon's `0700` directory and `0600`
+socket silently secured nothing, while the README stated both as a privacy
+commitment. The daemon now skips those calls explicitly and says so in its log;
+the shell sets a real DACL naming only the current user before spawning it, and
+§5 of [api/README.md](api/README.md) makes that an obligation on any Windows
+shell rather than an assumption.
+
+**There is no graceful stop, and no orphan reparenting.**
+`os/exec_windows.go` implements `Process.Signal` for `Kill` alone, and Windows
+does not reparent orphans, so both of the backstops that reclaim a daemon
+holding an API key on the other platforms are absent. A job object with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` replaces them, and is stronger: the OS
+kills the daemon the moment the shell's handle closes, including when the shell
+is killed from Task Manager. The daemon is therefore always terminated and never
+unlinks its own socket, so a stale socket is the ordinary case on Windows rather
+than an edge one.
+
+Two consequences follow for anyone working on this. `-race` is unavailable —
+it needs cgo everywhere except macOS, and the point of this shell is that it
+needs no C toolchain — so the shared packages are raced in the macOS and Linux
+jobs, which is where the concurrency lives. And CI cannot test the desktop at
+all: GitHub's `windows-latest` runners have no guaranteed interactive desktop,
+so the hot key, the overlay and every synthetic keystroke are covered only by
+M8 in [MANUAL_TESTS.md](MANUAL_TESTS.md).
+
+### Why so much Win32 lives in untagged files
+
+Files like `keys.go`, `sendinput.go`, `place.go` and `trayicon.go` hold Win32
+constants and structures but carry no build tag, so they compile and are tested
+on a Mac. That is deliberate, and the reason is that the Win32 calls they feed
+fail *silently* when they are wrong:
+
+- `SendInput` validates the size it is told each record is and does nothing at
+  all if it disagrees, returning zero.
+- `Shell_NotifyIcon` decides which version of `NOTIFYICONDATAW` it has been
+  handed by reading `cbSize`, and either fails with no icon or ignores every
+  field past the size it inferred.
+
+Both would present as a shell where the shortcut fires, the overlay opens, and
+nothing is ever copied or no icon ever appears — on a machine none of this can
+be run on. Struct layout is fixed by the architecture rather than the operating
+system, so it can be asserted anywhere, and it is.
 
 ## Quirks that will otherwise cost you an hour
 
