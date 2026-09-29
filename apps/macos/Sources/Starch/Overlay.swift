@@ -43,7 +43,11 @@ final class OverlayController {
     var onCyclePreset: (() -> Void)?
 
     private let panel: OverlayPanel
-    private let textView = NSTextView()
+    /// TextKit 1, deliberately. The default `NSTextView()` is TextKit 2, and
+    /// in the running app it held the rewrite — Return replaced with it — yet
+    /// drew nothing, while the labels around it drew fine. TextKit 1 is the
+    /// long-settled path for a plain read-only text view in a scroll view.
+    private let textView = NSTextView(usingTextLayoutManager: false)
     private let scrollView = NSScrollView()
     private let presetLabel = UI.secondary("")
     private let hintLabel = UI.secondary("")
@@ -98,6 +102,15 @@ final class OverlayController {
         textView.drawsBackground = false
         textView.font = .systemFont(ofSize: 13)
         textView.textContainerInset = NSSize(width: 4, height: 4)
+        // The standard scroll-view text view setup, spelled out: created with
+        // a zero frame, the view otherwise relies on the scroll view to size
+        // it, and grows sideways instead of wrapping.
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
 
         scrollView.documentView = textView
         scrollView.drawsBackground = false
@@ -137,8 +150,7 @@ final class OverlayController {
     func begin(presetName: String, near capture: SelectionCapturer.Capture) {
         currentText = ""
         streaming = true
-        textView.string = ""
-        textView.textColor = .labelColor
+        show("", color: .labelColor)
         presetLabel.stringValue = presetName
         hintLabel.stringValue = "Return to replace · Esc to cancel · Tab for another style"
         spinner.startAnimation(nil)
@@ -161,7 +173,7 @@ final class OverlayController {
 
     func append(_ text: String) {
         currentText += text
-        textView.string = currentText
+        show(currentText, color: .labelColor)
         textView.scrollToEndOfDocument(nil)
     }
 
@@ -171,7 +183,7 @@ final class OverlayController {
         spinner.stopAnimation(nil)
         if !full.isEmpty {
             currentText = full
-            textView.string = full
+            show(full, color: .labelColor)
         }
         hintLabel.stringValue = "Return to replace · Esc to discard · Tab for another style"
     }
@@ -182,9 +194,19 @@ final class OverlayController {
         streaming = false
         spinner.stopAnimation(nil)
         currentText = ""
-        textView.string = message
-        textView.textColor = .secondaryLabelColor
+        show(message, color: .secondaryLabelColor)
         hintLabel.stringValue = "Esc to dismiss"
+    }
+
+    /// Sets the text and its colour together.
+    ///
+    /// Colour is an attribute of the text, not of the view: setting it on an
+    /// empty view colours nothing, and text assigned afterwards takes whatever
+    /// typing attributes were left behind — an error's grey, for instance.
+    private func show(_ text: String, color: NSColor) {
+        textView.string = text
+        textView.font = .systemFont(ofSize: 13)
+        textView.textColor = color
     }
 
     func hide() {
