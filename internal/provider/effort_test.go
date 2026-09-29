@@ -47,12 +47,12 @@ func TestEachProviderSendsEffortInItsOwnField(t *testing.T) {
 			want:   `"output_config":{"effort":"medium"}`,
 		},
 		{
-			name: "gemini uses generationConfig.thinkingLevel",
+			name: "gemini uses generationConfig.thinkingConfig.thinkingLevel",
 			build: func(c *http.Client, url string) Provider {
 				return NewGemini(c, url+"/v1beta", "k", "gemini-flash-latest")
 			},
 			events: []string{geminiStop},
-			want:   `"thinkingLevel":"medium"`,
+			want:   `"thinkingConfig":{"thinkingLevel":"medium"}`,
 		},
 		{
 			name: "openai-compatible uses reasoning_effort",
@@ -142,7 +142,7 @@ func TestGeminiPrefersTheSessionLevelOverItsFloor(t *testing.T) {
 	}
 	collect(t, deltas)
 
-	if !strings.Contains(*got, `"thinkingLevel":"minimal"`) {
+	if !strings.Contains(*got, `"thinkingConfig":{"thinkingLevel":"minimal"}`) {
 		t.Errorf("the session level did not reach the request:\n%s", *got)
 	}
 }

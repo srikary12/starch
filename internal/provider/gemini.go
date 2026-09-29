@@ -141,7 +141,13 @@ func (g *Gemini) stream(ctx context.Context, req Request, withThinkingLevel bool
 		if level == "" {
 			level = geminiMinimumThinking
 		}
-		generation["thinkingLevel"] = level
+		// Inside thinkingConfig. At the top of generationConfig, where this
+		// used to go, Google rejects it as an unknown field — and the fallback
+		// below took that for an older model, dropped the level and let every
+		// Gemini session think at the model's own default. "low" was never
+		// applied: rewrites spent 600 to 1,500 thought tokens and seconds of
+		// first-token latency on a sentence.
+		generation["thinkingConfig"] = map[string]any{"thinkingLevel": level}
 	}
 
 	body := map[string]any{
