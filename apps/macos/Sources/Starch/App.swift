@@ -266,6 +266,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         daemon.onStatusChange = { [weak self] status in
             self?.refreshMenu()
+            // A new process: whatever session the app had died with the old
+            // one, along with the key it held. invalidateSession existed for
+            // exactly this and was never called, so after every respawn the
+            // first rewrite discovered the missing session by failing.
+            if status == .starting {
+                self?.invalidateSession()
+            }
             // The preset list lives behind the daemon, so it cannot be read
             // until one is up. Status only changes on a real transition —
             // uptime is deliberately excluded from Status's == — so this fires
@@ -273,6 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if status.isHealthy {
                 self?.refreshPresetsFromDaemon()
                 self?.refreshCatalogFromDaemon()
+                self?.prewarmSession()
             }
         }
         self.daemon = daemon
@@ -442,46 +450,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Runs one rewrite into the overlay.
     private func stream(capture: SelectionCapturer.Capture, preset: Preset) async {
-        guard let client = daemon?.client else {
-            overlay.showError("The helper is not running.")
+        guard let client = await readyClient() else {
+            reportFailure("The helper is not running.", log: "no daemon: \(daemonStatusSummary)")
             return
         }
 
         // The daemon holds the key in memory only, so a restarted daemon needs
-        // the session again. Establishing it lazily here — rather than at
-        // launch — also means a key added in Settings works without a restart.
+        // the session again. Establishing it here rather than only at launch
+        // also means a key added in Settings works without a restart.
         if !sessionReady, !(await establishSession(client: client)) { return }
 
+        let progress = StreamProgress()
         do {
-            try await runStream(client: client, capture: capture, preset: preset)
-        } catch let error as DaemonError where Self.isRecoverable(error) {
-            // The daemon went away mid-request. It restarts in well under a
-            // second — the supervisor respawns it, and Settings changes restart
-            // it deliberately — so the window where this happens is small and
-            // entirely invisible to the user. Surfacing it would be blaming
-            // them for our own lifecycle.
-            Log.capture.info("daemon unavailable; re-handshaking and retrying once")
+            try await runStream(client: client, capture: capture, preset: preset, progress: progress)
+        } catch let error as DaemonError where Self.isRecoverable(error) && !progress.delivered {
+            // The daemon was not there to answer — restarting, or holding no
+            // session because it is a new process. Nothing has been shown yet,
+            // so trying again is invisible, and surfacing it would be blaming
+            // the user for our own lifecycle.
+            //
+            // Only when nothing has been shown. A retry streams the rewrite a
+            // second time — into an overlay already holding the first attempt's
+            // text, and billed a second time. That used to happen whenever the
+            // socket's close was misreported after a rewrite had arrived, which
+            // is where "the helper isn't responding" after a finished rewrite
+            // came from.
+            Log.capture.info("daemon unavailable before answering (\(error.logSummary, privacy: .public)); retrying once")
             sessionReady = false
 
-            // Give the supervisor time to bring it back before trying again.
-            try? await Task.sleep(for: .milliseconds(400))
+            // No fixed wait, which there used to be — 400ms on every retry,
+            // including the common one where the daemon is up and merely has
+            // no session. readyClient asks the daemon rather than trusting its
+            // last-known status, so it waits exactly as long as a restart
+            // takes and not a moment longer.
             guard !Task.isCancelled else { return }
 
-            guard let retryClient = daemon?.client, await establishSession(client: retryClient) else {
+            guard let retryClient = await readyClient() else {
+                reportFailure("The helper is not running.", log: "no daemon on retry: \(daemonStatusSummary)")
                 return
             }
+            guard await establishSession(client: retryClient) else { return }
             do {
-                try await runStream(client: retryClient, capture: capture, preset: preset)
+                try await runStream(client: retryClient, capture: capture, preset: preset, progress: StreamProgress())
             } catch is CancellationError {
                 overlay.hide()
             } catch {
-                overlay.showError(readableMessage(for: error))
+                reportFailure(error)
             }
         } catch is CancellationError {
             overlay.hide()
         } catch {
-            overlay.showError(readableMessage(for: error))
+            reportFailure(error)
         }
+    }
+
+    /// Whether anything from a rewrite has reached the overlay.
+    private final class StreamProgress {
+        var delivered = false
     }
 
     /// Whether a failure is the daemon being momentarily absent rather than
@@ -499,17 +524,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The daemon's client, waiting briefly if it is between processes.
+    ///
+    /// Three seconds covers a respawn with room to spare — starchd answers in
+    /// tens of milliseconds — and is short enough that a helper which really
+    /// will not start is reported rather than waited on.
+    private func readyClient() async -> DaemonClient? {
+        await daemon?.readyClient(within: .seconds(3))
+    }
+
     /// One pass over the stream. Separated so the no-session retry can rerun it.
     private func runStream(
         client: DaemonClient,
         capture: SelectionCapturer.Capture,
-        preset: Preset
+        preset: Preset,
+        progress: StreamProgress
     ) async throws {
         let started = ContinuousClock.now
         var firstToken: Duration?
 
         for try await event in client.rewrite(text: capture.text, preset: preset.id) {
             if Task.isCancelled { return }
+            progress.delivered = true
             switch event {
             case let .delta(text):
                 if firstToken == nil { firstToken = started.duration(to: .now) }
@@ -518,7 +554,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 overlay.finish(full: full)
                 logTiming(started: started, firstToken: firstToken, usage: usage, preset: preset.id)
             case let .failed(code, message):
-                Log.capture.error("rewrite failed: \(code, privacy: .public)")
+                Log.capture.error("rewrite failed in-band: \(code, privacy: .public)")
                 overlay.showError(message)
             }
         }
@@ -526,19 +562,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func establishSession(client: DaemonClient) async -> Bool {
         do {
-            _ = try await client.startSession(SessionRequest(
-                provider: preferences.provider.rawValue,
-                model: preferences.model,
-                baseURL: preferences.baseURL,
-                apiKey: apiKey(for: preferences.provider),
-                thinkingEffort: preferences.thinkingEffort
-            ))
-            sessionReady = true
-            await refreshPresets(client: client)
+            try await configureSession(client: client)
             return true
         } catch {
-            overlay.showError(readableMessage(for: error))
+            reportFailure(error, while: "configuring the session")
             return false
+        }
+    }
+
+    /// Hands the daemon its credentials. No UI: callers decide what a
+    /// failure means, because for a background re-handshake it means nothing.
+    private func configureSession(client: DaemonClient) async throws {
+        _ = try await client.startSession(SessionRequest(
+            provider: preferences.provider.rawValue,
+            model: preferences.model,
+            baseURL: preferences.baseURL,
+            apiKey: apiKey(for: preferences.provider),
+            thinkingEffort: preferences.thinkingEffort
+        ))
+        sessionReady = true
+        await refreshPresets(client: client)
+    }
+
+    /// Re-handshakes with a new daemon in the background, so the next rewrite
+    /// does not pay for it on the critical path.
+    ///
+    /// Only once this launch has already read the Keychain for the provider —
+    /// even to find no key, since configureSession would otherwise read it
+    /// here. A read at this point would move the first-use prompt to login, or
+    /// under an unstable signing identity to every daemon restart, which is
+    /// exactly what the key cache exists to prevent. So the first session of
+    /// a launch is still established by the first rewrite; this covers every
+    /// one after it. A failure is ignored: the rewrite path will try again and
+    /// report it.
+    private func prewarmSession() {
+        guard !sessionReady, let client = daemon?.client else { return }
+        guard keyCache[preferences.provider.keychainAccount] != nil else { return }
+
+        Task { @MainActor [weak self] in
+            guard let self, !self.sessionReady else { return }
+            do {
+                try await self.configureSession(client: client)
+                Log.app.info("session re-established with the new daemon")
+            } catch {
+                let summary = (error as? DaemonError)?.logSummary ?? "\(type(of: error))"
+                Log.app.info("background re-handshake did not succeed: \(summary, privacy: .public)")
+            }
+        }
+    }
+
+    /// Shows a failure and records it.
+    ///
+    /// Every message the user sees is logged, because until now none were: the
+    /// overlay said "the helper isn't responding" and the log said nothing,
+    /// which left the one record of a failure on a screen that had already
+    /// been dismissed.
+    private func reportFailure(_ error: Error, while doing: String = "rewriting") {
+        let summary = (error as? DaemonError)?.logSummary ?? "\(type(of: error))"
+        Log.capture.error("failed \(doing, privacy: .public): \(summary, privacy: .public)")
+        overlay.showError(readableMessage(for: error))
+    }
+
+    private func reportFailure(_ message: String, log detail: String) {
+        Log.capture.error("\(detail, privacy: .public)")
+        overlay.showError(message)
+    }
+
+    private var daemonStatusSummary: String {
+        guard let status = daemon?.status else { return "no supervisor" }
+        switch status {
+        case .stopped: return "stopped"
+        case .starting: return "starting"
+        case .running: return "running"
+        case let .mismatch(detail): return "mismatch: \(detail)"
+        case let .failed(detail): return "failed: \(detail)"
         }
     }
 
@@ -673,8 +770,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         usage: RewriteUsage?,
         preset: String
     ) {
-        let total = Double(started.duration(to: .now).components.attoseconds) / 1e15
-        let first = firstToken.map { Double($0.components.attoseconds) / 1e15 } ?? -1
+        let total = started.duration(to: .now).milliseconds
+        let first = firstToken?.milliseconds ?? -1
         Log.capture.info(
             """
             rewrite done preset=\(preset, privacy: .public) \

@@ -322,7 +322,7 @@ final class SelectionCapturer {
 
     /// Metadata only. The selected text never reaches the log.
     private func log(_ capture: Capture) {
-        let millis = Double(capture.duration.components.attoseconds) / 1e15
+        let millis = capture.duration.milliseconds
         Log.capture.info(
             """
             captured via \(capture.strategy.rawValue, privacy: .public) \

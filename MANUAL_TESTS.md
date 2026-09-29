@@ -29,6 +29,7 @@ make logs               # in a second terminal
 | 4 | `lsof -aPi -p $(pgrep -x starchd)` | No output. **Any TCP port here is a serious bug.** |
 | 5 | `curl --unix-socket ~/Library/Application\ Support/Starch/starchd.sock http://d/healthz` | `401` with a JSON `unauthorized` envelope |
 | 6 | Leave the app running for 60s | `starchd` still alive. It idle-exits at 30s, so surviving proves the authenticated heartbeat works. |
+| 6a | Note `pgrep -x starchd`, sleep the Mac for two minutes or more, wake it | **Same pid.** Sleep is not idleness. Until this was fixed the daemon measured idle time on the wall clock, which runs during sleep, so it exited on every wake — `daemon exited with status 0` in the log, the key dropped, and the first rewrite afterwards paying for a respawn. No unit test can catch a regression here: Go offers no way to build a time whose wall and monotonic readings diverge, so a fake clock passes against the broken version too. |
 | 7 | Quit from the menu | `starchd` gone within ~1s, socket file gone |
 | 8 | Relaunch, then `kill -9` the **app** | `starchd` gone within ~6s, socket file gone (orphan watchdog) |
 | 9 | `kill -9` the **daemon** while the app runs | Menu briefly shows unavailable, then reconnects with a new pid |

@@ -88,3 +88,35 @@ struct DaemonErrorTests {
         #expect(body == "upstream exploded")
     }
 }
+
+// Errors shown to the user are now logged, which means their descriptions reach
+// unified logging. The API message is the one part that comes from a provider,
+// and a provider is free to quote the rejected input back — so it must never be
+// in the log line, however useful it would be there.
+@Suite("Logging an error")
+struct DaemonErrorLoggingTests {
+    @Test("an API message never reaches the log")
+    func apiMessageIsNotLogged() {
+        let error = DaemonError.api(
+            status: 400, code: "provider_error",
+            message: "Content rejected: thx for the update, see you at 5"
+        )
+        #expect(!error.logSummary.contains("thx for the update"))
+        #expect(error.logSummary.contains("provider_error"))
+        #expect(error.logSummary.contains("400"))
+    }
+
+    @Test("an unexpected body never reaches the log")
+    func unexpectedBodyIsNotLogged() {
+        let error = DaemonError.unexpectedStatus(502, body: "upstream said: thx for the update")
+        #expect(!error.logSummary.contains("thx"))
+        #expect(error.logSummary.contains("502"))
+    }
+
+    @Test("our own descriptions do, because they are the point")
+    func ownDescriptionsAreLogged() {
+        #expect(DaemonError.transport("the helper is not listening").logSummary
+            .contains("not listening"))
+        #expect(DaemonError.incompleteStream.logSummary == "incomplete stream")
+    }
+}
