@@ -427,7 +427,7 @@ func TestGeminiAsksForTheLowestThinkingLevel(t *testing.T) {
 	deltas, _ := p.Stream(context.Background(), Request{User: "x"})
 	collect(t, deltas)
 
-	if !strings.Contains(gotBody, `"thinkingLevel":"low"`) {
+	if !strings.Contains(gotBody, `"thinkingConfig":{"thinkingLevel":"low"}`) {
 		t.Errorf("no thinkingLevel in the request: %s", gotBody)
 	}
 }
@@ -447,7 +447,7 @@ func TestGeminiFallsBackWhenThinkingLevelIsRejected(t *testing.T) {
 		if strings.Contains(bodies[len(bodies)-1], "thinkingLevel") {
 			w.WriteHeader(http.StatusBadRequest)
 			fmt.Fprint(w, `{"error":{"status":"INVALID_ARGUMENT",`+
-				`"message":"Unknown name \"thinkingLevel\" at 'generation_config'"}}`)
+				`"message":"Unknown name \"thinkingLevel\" at 'generation_config.thinking_config'"}}`)
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
