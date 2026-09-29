@@ -673,8 +673,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         usage: RewriteUsage?,
         preset: String
     ) {
-        let total = Double(started.duration(to: .now).components.attoseconds) / 1e15
-        let first = firstToken.map { Double($0.components.attoseconds) / 1e15 } ?? -1
+        let total = started.duration(to: .now).milliseconds
+        let first = firstToken?.milliseconds ?? -1
         Log.capture.info(
             """
             rewrite done preset=\(preset, privacy: .public) \
