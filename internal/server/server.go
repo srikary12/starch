@@ -58,9 +58,10 @@ type Server struct {
 	now     func() time.Time
 	started time.Time
 
-	// lastActive is the Unix-nano timestamp of the most recent request
-	// boundary. inFlight counts requests currently being served; a long SSE
-	// stream must not look idle just because it started a while ago.
+	// lastActive is when the most recent request boundary happened, as an
+	// offset from started rather than a wall-clock timestamp. See idleFor.
+	// inFlight counts requests currently being served; a long SSE stream must
+	// not look idle just because it started a while ago.
 	lastActive atomic.Int64
 	inFlight   atomic.Int64
 
@@ -212,8 +213,7 @@ func (s *Server) idleSignal(ctx context.Context) <-chan struct{} {
 				if s.inFlight.Load() > 0 {
 					continue
 				}
-				last := time.Unix(0, s.lastActive.Load())
-				if s.now().Sub(last) >= s.opts.IdleTimeout {
+				if s.idleFor() >= s.opts.IdleTimeout {
 					s.log.Info("no requests within idle timeout, exiting",
 						"idle_timeout", s.opts.IdleTimeout)
 					return
@@ -224,7 +224,33 @@ func (s *Server) idleSignal(ctx context.Context) <-chan struct{} {
 	return out
 }
 
-func (s *Server) touch() { s.lastActive.Store(s.now().UnixNano()) }
+func (s *Server) touch() { s.lastActive.Store(int64(s.sinceStart())) }
+
+// sinceStart is how long the daemon has been running, on the monotonic clock.
+//
+// Both operands carry Go's monotonic reading, so the subtraction uses it and
+// never the wall clock. That distinction is the whole reason this exists.
+func (s *Server) sinceStart() time.Duration { return s.now().Sub(s.started) }
+
+// idleFor is how long it has been since the last request boundary.
+//
+// Measured on the monotonic clock, which on macOS is mach_absolute_time and
+// does not advance while the machine sleeps. It used to be measured on the
+// wall clock — lastActive was stored as UnixNano, and time.Unix rebuilds a
+// time without the monotonic reading, so Sub fell back to wall time — and the
+// wall clock does run during sleep. So every time the Mac woke, even for a
+// few seconds of DarkWake, the idle watchdog saw hours of silence and exited
+// before the app's next heartbeat could reach it. The app logged it as a
+// failure, respawned the daemon, and the key it had been holding went with
+// it; the first rewrite after waking paid for all of that.
+//
+// Sleep is not idleness. The idle timeout exists to reclaim a daemon whose
+// shell has gone, and the shell cannot heartbeat while the machine is asleep.
+// A shell that died during sleep is still caught on wake by the parent
+// watchdog, which does not depend on this clock at all.
+func (s *Server) idleFor() time.Duration {
+	return s.sinceStart() - time.Duration(s.lastActive.Load())
+}
 
 // withActivity records request boundaries for the idle timer.
 func (s *Server) withActivity(next http.Handler) http.Handler {
