@@ -122,9 +122,12 @@ test-go:
 test-desktop:
 	@$(MAKE) -C $(DESKTOP_DIR) test
 
-## test-swift: run the Swift tests
-test-swift:
-	@$(MAKE) -C $(MACOS_DIR) test
+## test-swift: run the Swift tests, including against a real starchd
+##             The daemon is built first because one suite drives the real
+##             one: the socket-close bug that made finished rewrites report a
+##             dead helper passed every scripted test and failed half of these.
+test-swift: daemon
+	@STARCH_DAEMON=$(abspath $(BUILD_DIR)/starchd) $(MAKE) -C $(MACOS_DIR) test
 
 ## fmt: format the Go sources
 fmt:

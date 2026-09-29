@@ -324,6 +324,9 @@ private final class StreamingExchange: @unchecked Sendable {
     /// envelope. A successful stream is never buffered.
     private var errorBody = Data()
     private var finished = false
+    /// Set once the request is sent and a reply is being read. From then on
+    /// the receive loop decides how the exchange ends; see socketCloseGrace.
+    private var receiving = false
 
     init(
         socketPath: String,
@@ -348,26 +351,6 @@ private final class StreamingExchange: @unchecked Sendable {
         }
     }
 
-    /// Describes an NWError in terms that are true of a Unix socket.
-    ///
-    /// The POSIX strings are written for IP networking and actively mislead
-    /// here: ENETDOWN surfaces as "Network is down", which sends someone off
-    /// to check their wifi when what actually happened is that the helper was
-    /// restarting and its socket was momentarily gone.
-    private static func describe(_ error: NWError) -> String {
-        if case let .posix(code) = error {
-            switch code {
-            case .ENETDOWN, .ENOENT, .ECONNREFUSED, .ECONNRESET, .EPIPE:
-                return "the helper is not listening"
-            case .EACCES, .EPERM:
-                return "permission was denied on the helper's socket"
-            default:
-                break
-            }
-        }
-        return error.localizedDescription
-    }
-
     private func begin() {
         connection.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
@@ -375,13 +358,13 @@ private final class StreamingExchange: @unchecked Sendable {
             case .ready:
                 self.send()
             case let .failed(error):
-                self.fail(.transport(Self.describe(error)))
+                self.connectionFailed(error)
             case let .waiting(error):
                 // A Unix socket does not wait for a route to appear. Without
                 // this the connection sits in .waiting indefinitely and, since
                 // this exchange has no timeout of its own, the overlay spins
                 // forever with no error.
-                self.fail(.transport(Self.describe(error)))
+                self.fail(.transport(describeSocketError(error)))
             case .cancelled:
                 self.complete()
             default:
@@ -402,11 +385,37 @@ private final class StreamingExchange: @unchecked Sendable {
         connection.send(content: bytes, completion: .contentProcessed { [weak self] error in
             guard let self else { return }
             if let error {
-                self.fail(.transport(Self.describe(error)))
+                self.fail(.transport(describeSocketError(error)))
                 return
             }
+            self.receiving = true
             self.receive()
         })
+    }
+
+    /// The connection reported `.failed`.
+    ///
+    /// Before a reply is being read, the helper genuinely could not be reached.
+    /// After, this is almost always the daemon closing the socket as it does
+    /// after every rewrite, reported early: Network.framework surfaces that
+    /// ordinary close as `.failed(ENETDOWN)`, sometimes before the receive
+    /// carrying the last events has run. Failing here is what turned finished
+    /// rewrites into "the helper is not listening". So the receive loop is left
+    /// to finish the job, and this is only the bound on waiting for it.
+    private func connectionFailed(_ error: NWError) {
+        guard !finished else { return }
+        guard receiving else {
+            fail(.transport(describeSocketError(error)))
+            return
+        }
+        queue.asyncAfter(deadline: .now() + socketCloseGrace) { [weak self] in
+            guard let self, !self.finished else { return }
+            if self.head == nil {
+                self.fail(.transport(describeSocketError(error)))
+            } else {
+                self.finishStream()
+            }
+        }
     }
 
     private func receive() {
@@ -414,12 +423,31 @@ private final class StreamingExchange: @unchecked Sendable {
             [weak self] data, _, isComplete, error in
             guard let self else { return }
 
-            if let error {
-                self.fail(.transport(Self.describe(error)))
-                return
-            }
+            // Data before the error. Network.framework can deliver the last
+            // bytes of a response and the error that ended the connection in
+            // the same callback, and checking the error first throws away the
+            // very bytes that might have carried the terminal event.
             if let data, !data.isEmpty {
                 self.ingest(data)
+            }
+            // A terminal event ends the exchange by itself, and whatever the
+            // connection reports after that is not about this rewrite.
+            if self.finished { return }
+
+            if let error {
+                // Network.framework reports a peer's ordinary close on a Unix
+                // socket as an error, so what this means depends on how far the
+                // response got. Before any reply, the helper was not there to
+                // answer. After one began, it plainly was, and the response has
+                // simply ended — which finishStream turns into the daemon's own
+                // error or an incomplete rewrite, rather than "not listening",
+                // which was false and sent people looking for a dead helper.
+                if self.head == nil {
+                    self.fail(.transport(describeSocketError(error)))
+                } else {
+                    self.finishStream()
+                }
+                return
             }
             if isComplete {
                 self.drainParser()
@@ -446,6 +474,9 @@ private final class StreamingExchange: @unchecked Sendable {
         }
 
         for event in events {
+            // A terminal event part-way through this batch has already ended
+            // the exchange; the rest of the batch belongs to nothing.
+            if finished { return }
             switch event {
             case let .head(h):
                 head = h
@@ -482,7 +513,7 @@ private final class StreamingExchange: @unchecked Sendable {
     }
 
     private func emit(_ payload: String) {
-        guard let data = payload.data(using: .utf8) else { return }
+        guard !finished, let data = payload.data(using: .utf8) else { return }
 
         let decoderJSON = JSONDecoder()
         decoderJSON.keyDecodingStrategy = .convertFromSnakeCase
@@ -491,12 +522,21 @@ private final class StreamingExchange: @unchecked Sendable {
             return
         }
 
+        // Both terminal events end the exchange here, not when the connection
+        // closes. The contract says so — exactly one terminal event, and an
+        // in-band error "ends the stream" — and waiting for the close instead
+        // made the outcome of a finished rewrite depend on how the socket
+        // happened to be torn down. When the close surfaced as an error, a
+        // rewrite the user had watched complete was reported as a dead helper,
+        // and the app re-ran the whole thing.
         if let failure = frame.error {
             continuation.yield(.failed(code: failure.code, message: failure.message))
+            complete()
             return
         }
         if frame.done == true {
             continuation.yield(.done(full: frame.full ?? "", usage: frame.usage))
+            complete()
             return
         }
         if let delta = frame.delta, !delta.isEmpty {
@@ -504,10 +544,24 @@ private final class StreamingExchange: @unchecked Sendable {
         }
     }
 
+    /// The response has ended, one way or another.
+    ///
+    /// Reaching here with the exchange still open means no terminal event
+    /// arrived, and that is never a success. It used to be treated as one: a
+    /// daemon that died part-way through ended the stream quietly, and the
+    /// overlay was left showing half a sentence as though it were still
+    /// arriving, with nothing to say why.
     private func finishStream() {
         guard !finished else { return }
 
-        if let head, head.statusCode != 200 {
+        guard let head else {
+            // Hung up without answering at all — most likely a daemon that was
+            // restarting. A transport error, so the app's retry can cover it:
+            // nothing has been shown yet, so nothing would be repeated.
+            fail(.transport("the helper closed the connection without answering"))
+            return
+        }
+        if head.statusCode != 200 {
             finished = true
             connection.cancel()
             continuation.finish(throwing: DaemonClient.daemonError(from: head, body: errorBody))
@@ -516,7 +570,8 @@ private final class StreamingExchange: @unchecked Sendable {
         if let trailing = decoder.finish() {
             emit(trailing)
         }
-        complete()
+        // A trailing terminal event would have completed the exchange.
+        fail(.incompleteStream)
     }
 
     private func complete() {

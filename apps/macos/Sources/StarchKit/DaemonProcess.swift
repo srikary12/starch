@@ -98,6 +98,36 @@ public final class DaemonProcess {
         return DaemonClient(socketPath: socketPath, token: token)
     }
 
+    /// A client for a daemon that has just answered, waiting up to `limit`.
+    ///
+    /// For the rewrite path. The daemon is sometimes between processes when
+    /// the shortcut is pressed — respawning after a crash, or sitting in a
+    /// restart back-off — and the old behaviour was to say "The helper is not
+    /// running" at once, for a helper that would have been up a few hundred
+    /// milliseconds later. A person who just pressed the shortcut is the best
+    /// possible reason to skip the back-off, so a pending restart is started
+    /// as soon as the old process is gone rather than waited for.
+    ///
+    /// The daemon is asked, not assumed. `status` is only as fresh as the last
+    /// heartbeat, and a process that has just died still reads as running
+    /// until its exit notification arrives — the first version of this handed
+    /// back the dead daemon's client in exactly that window, and a test
+    /// against the real daemon caught it. One health request over the Unix
+    /// socket costs about a millisecond.
+    public func readyClient(within limit: Duration) async -> DaemonClient? {
+        let deadline = ContinuousClock.now.advanced(by: limit)
+        while true {
+            if process == nil, !stopping { start() }
+            if status.isHealthy, let client, let process,
+               let health = try? await client.health(timeout: 0.5),
+               health.pid == process.processIdentifier {
+                return client
+            }
+            guard ContinuousClock.now < deadline, !Task.isCancelled else { return nil }
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+    }
+
     // MARK: Lifecycle
 
     public func start() {

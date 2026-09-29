@@ -52,7 +52,26 @@ jobs:
           xcode-select -p
           swift --version
 
-      - run: make test-swift
+      # One Swift suite drives the real daemon, so this job builds it.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Tests, including against a real starchd
+        run: |
+          set -euo pipefail
+          make test-swift 2>&1 | tee /tmp/swift.log
+
+      - name: The real-daemon suite really ran
+        # It skips itself when STARCH_DAEMON is unset, and a skip reads as a
+        # pass. It is the only test that caught the socket-close bug, so it is
+        # worth asserting.
+        run: |
+          set -euo pipefail
+          if grep -q 'skipped: "set STARCH_DAEMON' /tmp/swift.log; then
+            echo "the real-daemon suite was skipped"; exit 1
+          fi
+          grep -q 'Test "every rewrite is delivered and ends cleanly" passed' /tmp/swift.log
 
   bundle:
     name: App bundle
