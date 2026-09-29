@@ -160,3 +160,67 @@ struct RealDaemonTests {
         }
     }
 }
+
+// MARK: - The supervisor, when the shortcut is pressed at a bad moment
+
+/// A socket path in a directory of its own, removed afterwards.
+private func scratchSocket() throws -> (socket: String, cleanUp: () -> Void) {
+    let directory = "/tmp/starch-sv-\(UUID().uuidString.prefix(6))"
+    try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+    return (directory + "/d.sock", { try? FileManager.default.removeItem(atPath: directory) })
+}
+
+@MainActor
+@Suite(
+    "The supervisor, asked for a daemon on demand",
+    .serialized,
+    .enabled(if: daemonPath != nil, "set STARCH_DAEMON to a built starchd")
+)
+struct ReadyClientTests {
+    /// Pressing the shortcut before anything has started still gets a helper.
+    @Test("a stopped supervisor starts the daemon and hands back a client that answers")
+    func startsFromStopped() async throws {
+        let (socket, cleanUp) = try scratchSocket()
+        defer { cleanUp() }
+        let supervisor = DaemonProcess(
+            executableURL: URL(fileURLWithPath: try #require(daemonPath)),
+            socketPath: socket
+        )
+        defer { supervisor.stop() }
+
+        let client = try #require(await supervisor.readyClient(within: .seconds(3)))
+        let health = try await client.health(timeout: 1)
+        #expect(health.status == "ok")
+    }
+
+    /// The case that used to say "The helper is not running" at once.
+    ///
+    /// After a crash the supervisor waits out a back-off before respawning.
+    /// Someone who has just pressed the shortcut is the best reason there is
+    /// to skip it, so asking for a client starts the daemon now — and hands
+    /// back one bound to the new process, not the dead one.
+    @Test("a killed daemon is replaced promptly when a client is asked for")
+    func replacesAKilledDaemon() async throws {
+        let (socket, cleanUp) = try scratchSocket()
+        defer { cleanUp() }
+        let supervisor = DaemonProcess(
+            executableURL: URL(fileURLWithPath: try #require(daemonPath)),
+            socketPath: socket
+        )
+        defer { supervisor.stop() }
+
+        let first = try #require(await supervisor.readyClient(within: .seconds(3)))
+        let before = try await first.health(timeout: 1).pid
+        kill(before, SIGKILL)
+
+        let started = ContinuousClock.now
+        let second = try #require(
+            await supervisor.readyClient(within: .seconds(3)),
+            "no daemon came back within the limit"
+        )
+        let after = try await second.health(timeout: 1).pid
+
+        #expect(after != before, "handed back the dead daemon's client")
+        #expect(started.duration(to: .now) < .seconds(3))
+    }
+}

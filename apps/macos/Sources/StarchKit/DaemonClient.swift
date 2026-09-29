@@ -433,6 +433,26 @@ public enum DaemonError: Error, LocalizedError {
             "The helper stopped before finishing the rewrite."
         }
     }
+
+    /// A description safe to log publicly.
+    ///
+    /// Everything here is either ours or a code: never an API message, which
+    /// comes from the provider and could in principle quote the text being
+    /// rewritten. It exists because errors shown to the user used to be logged
+    /// nowhere at all, so the one record of what went wrong was a message on
+    /// screen that had already been dismissed.
+    public var logSummary: String {
+        switch self {
+        case .timedOut: "timed out"
+        case .unauthorized: "unauthorized"
+        case let .api(status, code, _): "api status=\(status) code=\(code)"
+        case let .unexpectedStatus(status, _): "unexpected status \(status)"
+        case let .transport(detail): "transport: \(detail)"
+        case let .framing(error): "framing: \(error.errorDescription ?? "unknown")"
+        case .decoding: "decoding"
+        case .incompleteStream: "incomplete stream"
+        }
+    }
 }
 
 /// A single HTTP request over a Unix domain socket, using Network.framework.
