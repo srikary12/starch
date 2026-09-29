@@ -404,6 +404,14 @@ public enum DaemonError: Error, LocalizedError {
     case transport(String)
     case framing(HTTPFramingError)
     case decoding(String)
+    /// A rewrite whose connection ended before its terminal event.
+    ///
+    /// Its own case rather than a transport error because it is not one:
+    /// the daemon answered, streamed, and then stopped. The deltas received so
+    /// far look exactly like a short finished rewrite, and offering them as one
+    /// would put half a sentence into somebody's document. The Go shell has the
+    /// same distinction, as client.ErrIncompleteStream.
+    case incompleteStream
 
     public var errorDescription: String? {
         switch self {
@@ -421,12 +429,46 @@ public enum DaemonError: Error, LocalizedError {
             error.errorDescription
         case let .decoding(detail):
             "Could not decode the daemon's response: \(detail)"
+        case .incompleteStream:
+            "The helper stopped before finishing the rewrite."
         }
     }
 }
 
 /// A single HTTP request over a Unix domain socket, using Network.framework.
 ///
+/// Describes an NWError in terms that are true of a Unix socket.
+///
+/// The POSIX strings are written for IP networking and actively mislead here:
+/// ENETDOWN surfaces as "Network is down", which sends someone off to check
+/// their wifi when what actually happened is that the helper was restarting
+/// and its socket was momentarily gone.
+func describeSocketError(_ error: NWError) -> String {
+    if case let .posix(code) = error {
+        switch code {
+        case .ENETDOWN, .ENOENT, .ECONNREFUSED, .ECONNRESET, .EPIPE:
+            return "the helper is not listening"
+        case .EACCES, .EPERM:
+            return "permission was denied on the helper's socket"
+        default:
+            break
+        }
+    }
+    return error.localizedDescription
+}
+
+/// How long a connection that has reported `.failed` gets to deliver what it
+/// already read.
+///
+/// Network.framework reports the peer's *ordinary* close of a Unix socket as
+/// `.failed(ENETDOWN)`, through the state handler, and it can do so before the
+/// receive callback carrying the reply's last bytes has run. Measured rather
+/// than assumed: left alone, that receive still arrives, with the data and
+/// then a clean end-of-stream. So once a reply is being read, `.failed` does not
+/// end the exchange — the receive loop does — and this is only the bound on
+/// waiting for it, for a connection that genuinely died.
+let socketCloseGrace: TimeInterval = 0.5
+
 /// One connection per request: see `HTTPRequest.serialized`. Everything
 /// mutable is confined to `queue`, which is why the unchecked conformance is
 /// safe here.
@@ -442,6 +484,9 @@ private final class UnixHTTPExchange: @unchecked Sendable {
     private var continuation: CheckedContinuation<(HTTPResponseHead, Data), Error>?
     private var settled = false
     private var cancelledBeforeStart = false
+    /// Set once the request is sent and a reply is being read. From then on
+    /// the receive loop decides how the exchange ends; see socketCloseGrace.
+    private var receiving = false
 
     init(socketPath: String, request: HTTPRequest, timeout: TimeInterval) {
         self.connection = NWConnection(to: .unix(path: socketPath), using: .tcp)
@@ -476,14 +521,12 @@ private final class UnixHTTPExchange: @unchecked Sendable {
             case .ready:
                 self.send()
             case let .failed(error):
-                // Network.framework also reports the peer's normal close as a
-                // failure on this path; ignore anything after we have settled.
-                self.settle(.failure(DaemonError.transport(error.localizedDescription)))
+                self.connectionFailed(error)
             case let .waiting(error):
                 // A Unix socket does not "wait" for a route; this means the
                 // socket file is missing or unreadable, so fail fast rather
                 // than sitting until the timeout.
-                self.settle(.failure(DaemonError.transport(error.localizedDescription)))
+                self.settle(.failure(DaemonError.transport(describeSocketError(error))))
             default:
                 break
             }
@@ -502,11 +545,32 @@ private final class UnixHTTPExchange: @unchecked Sendable {
         connection.send(content: bytes, completion: .contentProcessed { [weak self] error in
             guard let self else { return }
             if let error {
-                self.settle(.failure(DaemonError.transport(error.localizedDescription)))
+                self.settle(.failure(DaemonError.transport(describeSocketError(error))))
                 return
             }
+            self.receiving = true
             self.receive()
         })
+    }
+
+    /// The connection reported `.failed`.
+    ///
+    /// Before a reply is being read, that is a real failure to reach the
+    /// helper. After, it is usually just the helper closing the socket as it
+    /// does after every reply, reported early — and settling on it here would
+    /// throw away a complete reply the receive loop has not yet delivered.
+    /// That race failed roughly one request in twenty: health checks flipped
+    /// the menu to a failed helper, and a session handshake that lost it put
+    /// "the helper isn't responding" in the overlay before a rewrite began.
+    private func connectionFailed(_ error: NWError) {
+        guard !settled else { return }
+        guard receiving else {
+            settle(.failure(DaemonError.transport(describeSocketError(error))))
+            return
+        }
+        queue.asyncAfter(deadline: .now() + socketCloseGrace) { [weak self] in
+            self?.settle(.failure(DaemonError.transport(describeSocketError(error))))
+        }
     }
 
     private func receive() {
@@ -514,17 +578,18 @@ private final class UnixHTTPExchange: @unchecked Sendable {
             [weak self] data, _, isComplete, error in
             guard let self else { return }
 
-            if let error {
-                self.settle(.failure(DaemonError.transport(error.localizedDescription)))
-                return
-            }
-
             do {
+                // Data before the error: the last bytes of a reply and the
+                // error that ended the connection can arrive together.
                 if let data, !data.isEmpty {
                     try self.consume(self.parser.append(data))
                 }
                 if self.parser.isComplete {
                     self.finishSuccessfully()
+                    return
+                }
+                if let error {
+                    self.settle(.failure(DaemonError.transport(describeSocketError(error))))
                     return
                 }
                 if isComplete {
