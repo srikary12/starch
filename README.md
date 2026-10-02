@@ -73,9 +73,13 @@ thin native shell.
 `starchd` is a local daemon on your machine, not a service anyone operates. The
 shell spawns it at login, supervises it, and makes sure it dies with the app.
 
-A second shell is being written for Linux, in Go, and it is the test of that
-claim: it reuses the same daemon unchanged, over the same socket, and the only
-thing it had to add was the OS-specific half. Windows would be a third.
+Two more shells are being written in Go, and they are the test of that claim.
+Both reuse the same daemon unchanged, over the same socket, and the only thing
+either had to add was the OS-specific half. Windows got there first and proved
+it: the daemon needed two corrections for that platform — it was reporting
+success for a socket permission Windows cannot set, and it needed a job object
+because neither of its usual shutdown backstops exists there — and nothing else
+about it changed.
 
 The split also pays for itself on latency. A long-lived daemon keeps a warm
 HTTP client with keep-alive to your provider, so every rewrite after the first
@@ -126,9 +130,59 @@ Keyring, KWallet and KeePassXC all do. No GTK, no Qt, no development headers:
 the shell is pure Go and builds with `CGO_ENABLED=0` exactly as the daemon
 does, so cross-compiling it is a one-liner too.
 
-The desktop half is being written for **X11 first**. That is a deliberate
-narrowing rather than an oversight, and [CONTRIBUTING.md](CONTRIBUTING.md#the-linux-shell-targets-x11-first)
-records what Wayland costs and why it is its own decision.
+The desktop half is being written for **Wayland**, not X11. That reverses an
+earlier decision, for two reasons that both arrived after it was taken: GNOME 50
+removed the X11 session outright in March 2026, and the clipboard problem that
+made Wayland look impossible turned out to have a solution — the
+`org.freedesktop.portal.Clipboard` portal, which both the GNOME and KDE backends
+implement. One RemoteDesktop session covers reading the clipboard and
+synthesising keystrokes, GlobalShortcuts covers the hot key, and all of it is
+D-Bus, so the shell needs no new dependency at all.
+[CONTRIBUTING.md](CONTRIBUTING.md) records what that costs.
+
+### Windows
+
+**The rewrite loop is verified. The desktop half is written but unproven.**
+
+`starch config` and `starch rewrite` run on Windows and are exercised on every
+pull request against a real Windows runner, end to end, against a stub provider.
+That part works.
+
+The desktop half — the global shortcut, capture, the streaming overlay, replace
+in place, and the notification-area icon — is complete and compiles, and
+everything about it that can be checked without a desktop is tested. But
+GitHub's runners have no interactive desktop, so **no machine has yet executed a
+line of it**: not a keystroke, not a window, not a paste. Until somebody works
+through M8 in [MANUAL_TESTS.md](MANUAL_TESTS.md) on a real Windows desktop,
+treat it as untested code rather than a feature.
+
+There is also no installer, and the binaries are unsigned, so SmartScreen will
+warn about them until that changes.
+
+```
+go build -o build\starchd.exe .\cmd\starchd
+cd apps\desktop
+go build -o ..\..\build\starch.exe .\cmd\starch
+
+..\..\build\starch.exe config --list        the providers, endpoints and models
+..\..\build\starch.exe config --provider anthropic
+..\..\build\starch.exe config --key         read from the console, stored in Credential Manager
+..\..\build\starch.exe run                  the shell: press the shortcut anywhere
+```
+
+Needs Go 1.23+ and Windows 10 1803 or later — that is when `AF_UNIX` arrived,
+and the daemon speaks over a Unix socket on every platform. No C toolchain, no
+runtime to install: `CGO_ENABLED=0`, like the daemon. The key lives in
+**Credential Manager**, with local-machine persistence rather than enterprise,
+so it does not follow you onto every machine you sign in to.
+
+Two things are worth knowing before you rely on it. Capture is a clipboard round
+trip, so an application that refuses a synthetic Ctrl-C cannot be read from —
+Starch reports that rather than rewriting the wrong text. And Windows blocks
+input from an ordinary program to a window running as administrator, so
+rewriting inside an elevated application fails with a message saying so.
+
+`starch run` currently holds the console it was started from.
 
 ### Why there is no DMG or Homebrew cask
 
@@ -227,11 +281,20 @@ service its own keyboard shortcut on that same screen.
 | **M3** | Presets, including a neutral-business-English one | ✅ done |
 | **M4** | CI on every push, and tagged source releases | ✅ done |
 | **M5** | Model and endpoint pickers, and a thinking-effort control | ✅ done |
-| **M6** | A Linux shell: the rewrite loop first, X11 desktop integration next | 🚧 in progress |
+| **M6** | A Linux shell: the rewrite loop, then the desktop over Wayland portals | 🚧 in progress |
+| **M7** | A Windows shell: the rewrite loop, Credential Manager, socket ACL | ✅ done |
+| **M8** | The Windows desktop: hot key, overlay, replace in place, tray | 🚧 in progress |
+| **M9** | Packaging: signed binaries and an installer, on all three platforms | ⬜ not started |
+
+M6 and M8 are the same work twice, and that is the point: the flow itself —
+capture, stream, confirm, replace — is one platform-neutral package with the
+guarantees about your documents enforced inside it, and each platform supplies
+four methods underneath. M8 is the first to be finished, so Wayland implements
+an interface rather than inventing one.
 
 Not in v1: accounts, sync, analytics, auto-update, fine-tuning, or a custom
-keyboard. No Windows shell either, though the Go layer is written assuming one
-is coming, and the Linux shell above is the evidence that it can be.
+keyboard. Nor signed builds — M9 is real work with a real annual cost attached,
+and until it lands every platform is a build from source.
 
 **Also not in v1: a local voice profile.** It was planned — accepted rewrites
 kept in a local database, the nearest few injected as examples so output drifts
